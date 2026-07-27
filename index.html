@@ -304,9 +304,9 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 .cc-col:hover{transform:scale(1.1)}
 .toast{position:fixed;bottom:28px;left:16px;right:16px;margin:0 auto;width:fit-content;max-width:calc(100% - 32px);transform:translateY(12px);background:var(--card);border:1px solid var(--border);border-radius:10px;padding:10px 18px;font-size:12px;font-weight:500;white-space:normal;text-align:center;z-index:500;opacity:0;transition:all .25s;pointer-events:none;box-shadow:0 4px 20px rgba(0,0,0,.4)}
 
-.mn-inner{display:flex;flex-direction:row;justify-content:space-around;align-items:center;padding:8px 0 max(env(safe-area-inset-bottom),8px);width:100%}
-.mn-i{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 0;cursor:pointer;color:var(--t3);transition:color .12s;flex:1;min-width:0}
-.mn-i.mn-ico{font-size:20px}.mn-lbl{font-size:9px;font-weight:500}
+.mn-inner{display:flex;flex-direction:row;justify-content:center;align-items:center;gap:clamp(8px,6vw,32px);padding:8px 0 max(env(safe-area-inset-bottom),8px);width:100%}
+.mn-i{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 14px;cursor:pointer;color:var(--t3);transition:color .12s;flex:0 0 auto;min-width:0;border-radius:12px}
+.mn-i.mn-ico{font-size:20px}.mn-lbl{font-size:9px;font-weight:500;white-space:nowrap}
 
 .empty-st{text-align:center;padding:28px 0;color:var(--t3)}
 .empty-ico{font-size:28px;margin-bottom:8px}.empty-ttl{font-size:13px;font-weight:500;color:var(--t2)}.empty-sub{font-size:11px;margin-top:4px}
@@ -812,8 +812,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 </div>
 <div class="mob-nav"><div class="mn-inner">
   <div class="mn-i active" onclick="goPage('overview',this)"><span class="mn-ico">&#x1F3E0;</span><span class="mn-lbl">In&#237;cio</span></div>
-  <div class="mn-i" onclick="goPage('lancamentos',this)"><span class="mn-ico">&#x1F4CB;</span><span class="mn-lbl">Lan&#231;.</span></div>
-  <div class="mn-i" onclick="goPage('regras',this)"><span class="mn-ico">&#x26A1;</span><span class="mn-lbl">Regras</span></div>
+  <div class="mn-i" onclick="goPage('lancamentos',this)"><span class="mn-ico">&#x1F4CB;</span><span class="mn-lbl">Lan&#231;amentos</span></div>
   <div class="mn-i" onclick="goPage('contas',this)"><span class="mn-ico">&#x1F3E6;</span><span class="mn-lbl">Contas</span></div>
   <div class="mn-i" onclick="goPage('config',this)"><span class="mn-ico">&#x2699;&#xFE0F;</span><span class="mn-lbl">Config</span></div>
 </div></div>
