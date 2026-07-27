@@ -1184,8 +1184,9 @@ function openGhModal(){
   el('gh-file-inp').value=GH.file||'dados.json';
   el('gh-test-result').textContent='';
   el('gh-modal').classList.add('open');
+  _navPush({t:'modal',id:'gh-modal'});
 }
-function closeGhModal(){el('gh-modal').classList.remove('open');}
+function closeGhModal(){el('gh-modal').classList.remove('open');_navReplaceIfOverlay();}
 
 async function ghTest(){
   const tok=el('gh-token-inp').value.trim();
@@ -1471,9 +1472,10 @@ function openCatCreateModal(prefill,returnTarget,parentPreset){
   buildCcParent(type);
   if(parentPreset)setTimeout(()=>{const s=el('cc-parent');if(s)s.value=parentPreset;},10);
   el('cc-overlay').classList.add('open');
+  _navPush({t:'modal',id:'cc-overlay'});
   setTimeout(()=>el('cc-name').focus(),60);
 }
-function closeCatCreateModal(){el('cc-overlay').classList.remove('open');}
+function closeCatCreateModal(){el('cc-overlay').classList.remove('open');_navReplaceIfOverlay();}
 function buildCcParent(type){
   const sel=el('cc-parent');
   sel.innerHTML='<option value="">Nenhuma (categoria principal)</option>';
@@ -1527,9 +1529,10 @@ function openAccModal(accId){
   updateAccPreview();
   el('ac-del-btn').style.display=acc?'':'none';
   el('ac-overlay').classList.add('open');
+  _navPush({t:'modal',id:'ac-overlay'});
   setTimeout(()=>el('ac-name').focus(),60);
 }
-function closeAccModal(){el('ac-overlay').classList.remove('open');}
+function closeAccModal(){el('ac-overlay').classList.remove('open');_navReplaceIfOverlay();}
 function loadAccLogo(evt){
   const file=evt.target.files[0];if(!file)return;
   const reader=new FileReader();
@@ -2205,9 +2208,10 @@ function openRuleModal(ruleId){
   setCselVal('rule',r?r.category:'','');
   if(r&&r.category)setCselVal('rule',r.category,getCatDisplay(r.category)||r.category);
   el('rm-overlay').classList.add('open');
+  _navPush({t:'modal',id:'rm-overlay'});
   setTimeout(()=>el('rm-desc').focus(),60);
 }
-function closeRuleModal(){el('rm-overlay').classList.remove('open');}
+function closeRuleModal(){el('rm-overlay').classList.remove('open');_navReplaceIfOverlay();}
 function renderAltWords(){
   const wrap=el('aw-wrap');if(!wrap)return;
   const inp=el('aw-input');
@@ -2298,6 +2302,7 @@ function editTx(id){
   prefillFromTx(id);
   const badge=el('m-edit-badge');if(badge)badge.style.display='';
   el('m-overlay').classList.add('open');
+  _navPush({t:'modal',id:'m-overlay'});
   setTimeout(()=>{buildContaSelect();el('f-val').focus();},30);
 }
 
@@ -2337,9 +2342,10 @@ function openModal(type,txId){
   const badge=el('m-edit-badge');if(badge)badge.style.display=txId?'':'none';
   if(txId)prefillFromTx(txId);else clearForm();
   el('m-overlay').classList.add('open');
+  _navPush({t:'modal',id:'m-overlay'});
   setTimeout(()=>el('f-val').focus(),60);
 }
-function closeModal(){el('m-overlay').classList.remove('open');closeCsel();closeSuggestions();editingTxId=null;const b=el('m-edit-badge');if(b)b.style.display='none';}
+function closeModal(){el('m-overlay').classList.remove('open');_navReplaceIfOverlay();closeCsel();closeSuggestions();editingTxId=null;const b=el('m-edit-badge');if(b)b.style.display='none';}
 function cycleType(){mti=(mti+1)%3;updModal();}
 function updModal(){
   const t=MTYPES[mti];el('m-icon').innerHTML=t.ico;el('m-label').textContent=t.lbl;
@@ -2512,11 +2518,11 @@ function openCatDetail(name){
   const mn2=el('month-nav');if(mn2)mn2.style.display='none';
   const fb=el('fab-btn');if(fb)fb.style.display='none';
   renderCatDetail();window.scrollTo(0,0);
+  _navPush({t:'catdetail',name:catDetailName,year:catDetailYear,month:catDetailMonth,prevPage:catDetailPrev});
 }
 let catNavStack=[];
 function goBack(){
-  if(catNavStack.length>0){const prev=catNavStack.pop();catDetailName=prev;el('page-title').textContent=prev;renderCatDetail();}
-  else goPage(catDetailPrev||'overview');
+  history.back();
 }
 function changeCatDetailMonth(d){
   catDetailMonth+=d;
@@ -2622,21 +2628,70 @@ function toggleAccPopup(evt){
 function _closeAccPop(){const p=el('acc-popup');if(p)p.style.display='none';_accPopupOpen=false;}
 document.addEventListener('click',()=>_closeAccPop());
 // ========== NAVIGATION ==========
-const PAGE_TITLES={overview:'Vis\u00e3o Geral',lancamentos:'Lan\u00e7amentos',relatorios:'Relat\u00f3rios',regras:'Regras de Preenchimento',categorias:'Categorias',contas:'Contas',pagar:'A Pagar',config:'Configura\u00e7\u00f5es'};
-const MONTH_PAGES=['overview','lancamentos','relatorios','pagar'];
-const FAB_ICONS={overview:'+',lancamentos:'+',relatorios:'+',categorias:'&#x1F3F7;&#xFE0F;',contas:'&#x1F3E6;',pagar:'+',regras:'&#x26A1;',config:''};
+// Faz o bot\u00e3o/gesto nativo de "voltar" do celular funcionar como a navega\u00e7\u00e3o interna do app:
+// fecha modais/menu abertos, volta para a p\u00e1gina/categoria anterior e s\u00f3 sai do app
+// quando j\u00e1 estiver na p\u00e1gina mais externa (Vis\u00e3o Geral) sem mais hist\u00f3rico interno.
+let _histApplying=false;
+function _navPush(state){
+  if(_histApplying)return;
+  try{history.pushState(state,'');}catch(e){}
+}
+function _currentNavState(){
+  if(currentPage==='catdetail')return{t:'catdetail',name:catDetailName,year:catDetailYear,month:catDetailMonth,prevPage:catDetailPrev};
+  return{t:'page',page:currentPage};
+}
+function _navReplaceIfOverlay(){
+  if(_histApplying)return;
+  const st=history.state;
+  if(st&&(st.t==='modal'||st.t==='sidebar')){
+    try{history.replaceState(_currentNavState(),'');}catch(e){}
+  }
+}
+function _applyNavState(state){
+  const s=state||{t:'page',page:'overview'};
+  ['m-overlay','rm-overlay','cc-overlay','ac-overlay','gh-modal'].forEach(function(id){
+    const o=el(id);if(o&&o.classList.contains('open'))o.classList.remove('open');
+  });
+  closeMobSidebar();
+  if(s.t==='catdetail'){
+    if(currentPage==='catdetail'&&catDetailName===s.name)return;
+    catDetailName=s.name;catDetailYear=s.year;catDetailMonth=s.month;catDetailPrev=s.prevPage||'overview';
+    currentPage='catdetail';
+    document.querySelectorAll('.nav-i,.mn-i').forEach(function(e){e.classList.remove('active');});
+    document.querySelectorAll('.view').forEach(function(v){v.classList.add('hidden');});
+    const vw=el('view-catdetail');if(vw)vw.classList.remove('hidden');
+    const pt=el('page-title');if(pt)pt.textContent=s.name;
+    const mn2=el('month-nav');if(mn2)mn2.style.display='none';
+    const fb=el('fab-btn');if(fb)fb.style.display='none';
+    renderCatDetail();
+    window.scrollTo(0,0);
+  }else{
+    const page=s.page||'overview';
+    if(currentPage===page)return;
+    goPage(page,null,true);
+  }
+}
+window.addEventListener('popstate',function(e){
+  _histApplying=true;
+  _applyNavState(e.state);
+  setTimeout(function(){_histApplying=false;},0);
+});
+history.replaceState({t:'page',page:'overview'},'');
 function toggleMobSidebar(){
   const sb=document.querySelector('.sidebar');const bd=el('mob-sidebar-backdrop');
   if(!sb)return;
   const open=sb.classList.toggle('mob-open');
   if(bd)bd.classList.toggle('show',open);
+  if(open)_navPush({t:'sidebar'});else _navReplaceIfOverlay();
 }
 function closeMobSidebar(){
   const sb=document.querySelector('.sidebar');const bd=el('mob-sidebar-backdrop');
+  const wasOpen=!!(sb&&sb.classList.contains('mob-open'));
   if(sb)sb.classList.remove('mob-open');
   if(bd)bd.classList.remove('show');
+  if(wasOpen)_navReplaceIfOverlay();
 }
-function goPage(page,navEl){
+function goPage(page,navEl,fromHistory){
   closeMobSidebar();
   currentPage=page;
   document.querySelectorAll('.nav-i,.mn-i').forEach(e=>e.classList.remove('active'));
@@ -2660,6 +2715,7 @@ function goPage(page,navEl){
   else if(page==='regras')renderRulesTable();
   else if(page==='config')renderConfig();
   window.scrollTo(0,0);
+  if(!fromHistory)_navPush({t:'page',page:page});
 }
 function changeMonth(d){ovFilter='all';lcAccountFilter=null;const c=el('lc-acc-chip');if(c)c.style.display='none';
   S.month+=d;if(S.month>11){S.month=0;S.year++;}else if(S.month<0){S.month=11;S.year--;}
