@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.alvsigor.twa",
+        "sha256_cert_fingerprints": ["8A:E7:C2:98:F1:C5:F6:77:83:CD:DD:C4:AD:72:3F:4F:88:5B:25:8A:B1:29:2A:32:24:86:D2:AB:81:93:6A:70"]
+      }
+    }]
