@@ -2,7 +2,7 @@
       "relation": ["delegate_permission/common.handle_all_urls"],
       "target": {
         "namespace": "android_app",
-        "package_name": "io.github.alvsigor.twa",
-        "sha256_cert_fingerprints": ["8A:E7:C2:98:F1:C5:F6:77:83:CD:DD:C4:AD:72:3F:4F:88:5B:25:8A:B1:29:2A:32:24:86:D2:AB:81:93:6A:70"]
+        "package_name": "com.alvsigor.financasapp",
+        "sha256_cert_fingerprints": ["5E:43:86:9B:C8:9E:3A:2E:48:C6:0C:02:0D:B2:35:A5:6B:72:64:1D:F9:B1:F2:73:57:59:C4:7C:06:7A:64:41"]
       }
     }]
