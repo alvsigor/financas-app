@@ -738,7 +738,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
           <button class="gh-btn" onclick="ghPull()">&#x2B07; Carregar do GitHub</button>
           <button class="gh-btn primary" onclick="ghPush()">&#x2B06; Salvar no GitHub</button>
         </div>
-        <div class="gh-status" id="gh-status-msg"><div class="gh-dot gh-dot-idle"></div><span>N&#227;o conectado</span></div>
+        <span id="sync-pending-badge" hidden style="background:#f59e0b;color:#000;font-size:10px;padding:2px 7px;border-radius:9px;font-weight:700;margin-right:6px;vertical-align:middle">⏳ sync pendente</span><div class="gh-status" id="gh-status-msg"><div class="gh-dot gh-dot-idle"></div><span>N&#227;o conectado</span></div>
       </div>
 
       <div class="cfg-section" style="grid-column:1/-1">
@@ -1291,9 +1291,67 @@ async function ghPush(retry){
     const sm3=el('gh-status-msg');if(sm3)sm3.classList.remove('gh-syncing');
     ghSetStatus('Erro ao salvar: '+e.message,'err');
     showToast('Erro GitHub: '+e.message);
+    // Offline: marca sync pendente para tentar ao reconectar
+    if(!navigator.onLine){
+      localStorage.setItem('fin_pending_sync','1');
+      const badge=el('sync-pending-badge');if(badge)badge.hidden=false;
+    }
   }
 }
 
+// ========== OFFLINE SYNC ==========
+async function ghMergeAndPush(){
+  if(!GH.token||!GH.user||!GH.repo)return;
+  try{
+    ghSetStatus('Sincronizando dados offline...','idle');
+    const r=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    GH.sha=d.sha||'';ghSaveConfigToStorage();
+    const b64=d.content.replace(/\n/g,'');
+    const bytes=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0));
+    const ghData=JSON.parse(new TextDecoder('utf-8').decode(bytes));
+    const ghIds=new Set((ghData.txs||[]).map(t=>t.id));
+    const localOnly=S.txs.filter(t=>!ghIds.has(t.id));
+    if(localOnly.length===0){
+      localStorage.removeItem('fin_pending_sync');
+      const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
+      ghSetStatus('\u2714 J\u00e1 sincronizado','ok');return;
+    }
+    ghData.txs=[...(ghData.txs||[]),...localOnly];
+    ghData.savedAt=new Date().toISOString();
+    S.txs=ghData.txs;
+    if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
+    if(ghData.rules)RULES=ghData.rules;
+    if(ghData.cats){
+      if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
+      if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
+      if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
+    }
+    if(ghData.cfg)Object.assign(CFG,ghData.cfg);
+    localStorage.setItem('fin_data',JSON.stringify(ghData));
+    await ghPush();
+    localStorage.removeItem('fin_pending_sync');
+    const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
+    render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
+    showToast('\u2714 '+localOnly.length+' lan\u00e7amento(s) sincronizado(s)!');
+  }catch(e){
+    ghSetStatus('Erro no sync offline: '+e.message,'err');
+    showToast('Erro sync offline: '+e.message);
+  }
+}
+window.addEventListener('online',()=>{
+  if(localStorage.getItem('fin_pending_sync')==='1'&&GH.token&&GH.user&&GH.repo){
+    setTimeout(ghMergeAndPush,1500);
+  }
+});
+if(typeof window!=='undefined'){
+  window.addEventListener('load',()=>{
+    if(navigator.onLine&&localStorage.getItem('fin_pending_sync')==='1'&&GH.token&&GH.user&&GH.repo){
+      setTimeout(ghMergeAndPush,2000);
+    }
+  });
+}
 // Auto-push: 3s debounce after every autoSave()
 let ghPushTimer=null;
 function ghSchedulePush(){
