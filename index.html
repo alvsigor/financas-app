@@ -474,7 +474,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 .acp-edit{width:28px;height:28px;border-radius:7px;background:var(--surface);border:1px solid var(--border);color:var(--t2);font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;opacity:0;transition:all .12s;flex-shrink:0;margin-left:8px}
 .acp-edit:hover{border-color:var(--green);color:var(--green)}
 /* Account filter chip in lancamentos */
-.lc-acc-chip{display:none;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:var(--bd);color:var(--blue);border:1px solid rgba(74,144,226,.3)}
+.lc-acc-chip{display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;background:var(--bd);color:var(--blue);border:1px solid rgba(74,144,226,.3);cursor:pointer}
 .lc-acc-chip button{background:none;border:none;color:currentColor;cursor:pointer;font-size:14px;padding:0;line-height:1;opacity:.7}
 .lc-acc-chip button:hover{opacity:1}
 .welcome-banner{display:none;position:fixed;top:0;left:0;right:0;z-index:500;background:linear-gradient(135deg,#1a1e2e,#0D0F18);border-bottom:1px solid var(--border);padding:16px 20px;box-shadow:0 4px 24px rgba(0,0,0,.5)}
@@ -644,7 +644,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
       </div>
       <div class="lc-full">
         <div class="lc-filter-bar">
-          <div class="lc-acc-chip" id="lc-acc-chip"><span></span> <button onclick="clearAccountFilter()">&#x2715;</button></div>
+          <div class="lc-acc-chip" id="lc-acc-chip" onclick="toggleLcAccPopup(event)"><span id="lc-acc-chip-lbl">&#x1F3E6; Todas as contas &#x25BE;</span> <button id="lc-acc-chip-x" onclick="event.stopPropagation();clearAccountFilter()" style="display:none">&#x2715;</button></div>
           <div class="fpill" id="lcf-all" data-f="all" onclick="setLcFilter('all')" style="background:var(--surface);color:var(--t2);border-color:var(--border)">Todos</div>
           <div class="fpill fp-g active" id="lcf-confirmados" data-f="confirmados" onclick="setLcFilter('confirmados')">&#x2714; Confirmados</div>
           <div class="fpill fp-a" id="lcf-agendados" data-f="agendados" onclick="setLcFilter('agendados')">&#x23F0; Agendados</div>
@@ -1908,12 +1908,15 @@ function renderPie(txs){
   const svg=el('pie-svg');const leg=el('pie-leg');if(!svg||!leg)return;
   const bycat={};
   txs.filter(t=>t.type==='despesa').forEach(t=>{const k=getParent(t.category)||t.category||'Outros';bycat[k]=(bycat[k]||0)+Math.round(t.amount*100);});
-  const entries=Object.entries(bycat).sort((a,b)=>b[1]-a[1]);
-  const total=entries.reduce((a,e)=>a+e[1],0);
+  const allEntries=Object.entries(bycat).sort((a,b)=>b[1]-a[1]);
+  const total=allEntries.reduce((a,e)=>a+e[1],0);
   if(!total){svg.innerHTML='<circle cx="60" cy="60" r="52" fill="none" stroke="var(--border)" stroke-width="14"/>';leg.innerHTML='<div class="pl-i"><span style="font-size:11px;color:var(--t3)">Nenhuma despesa</span></div>';const pt=el('pie-tot');if(pt)pt.textContent='0,00';return;}
+  // Mostra todas as categorias (sem agrupar as menores em "Outros"), garantindo
+  // que a soma dos percentuais listados sempre feche 100%.
+  const entries=allEntries;
   let angle=-Math.PI/2;
   svg.innerHTML='';
-  entries.slice(0,6).forEach(([cat,val])=>{
+  entries.forEach(([cat,val])=>{
     const sweep=(val/total)*2*Math.PI;
     const x1=60+52*Math.cos(angle),y1=60+52*Math.sin(angle);
     const x2=60+52*Math.cos(angle+sweep),y2=60+52*Math.sin(angle+sweep);
@@ -1923,11 +1926,19 @@ function renderPie(txs){
     angle+=sweep;
   });
   svg.innerHTML+='<circle cx="60" cy="60" r="34" fill="var(--card)"/>';
-  leg.innerHTML=entries.slice(0,8).map(([cat,val])=>{
-    const pc=Math.round((val/total)*100);
+  // M\u00e9todo do maior resto: garante que os percentuais da lista somem exatamente 100%,
+  // em vez de arredondar cada um isoladamente (o que pode deixar a soma em 99% ou 101%).
+  const rawPcts=entries.map(([,val])=>(val/total)*100);
+  const pcts=rawPcts.map(p=>Math.floor(p));
+  let remainder=100-pcts.reduce((a,b)=>a+b,0);
+  const order=rawPcts.map((p,i)=>({i,frac:p-Math.floor(p)})).sort((a,b)=>b.frac-a.frac);
+  for(let k=0;k<remainder&&k<order.length;k++){pcts[order[k].i]++;}
+  leg.innerHTML=entries.map(([cat,val],idx)=>{
+    const pc=pcts[idx];
     const r=Math.floor(val/100),c=val%100;
+    const color=getCatColor(cat);
     return '<div class="pl-i pie-click" data-cat="'+cat+'" onclick="openCatDetail(this.dataset.cat)">'
-      +'<div class="pl-nm-row"><div class="pl-dot" style="background:'+getCatColor(cat)+'"></div><div class="pl-nm">'+esc(cat)+'</div></div>'
+      +'<div class="pl-nm-row"><div class="pl-dot" style="background:'+color+'"></div><div class="pl-nm">'+esc(cat)+'</div></div>'
       +'<div class="pl-val-row"><div class="pl-pc">'+pc+'%</div><div class="pl-vl">-R$ '+r.toLocaleString('pt-BR')+','+String(c).padStart(2,'0')+'</div></div>'
       +'</div>';
   }).join('');
@@ -2011,8 +2022,6 @@ function goToAccountLancamentos(accName){
   const _fb=el('fab-btn');if(_fb){_fb.innerHTML='+';_fb.style.display='flex';}
   render();renderLancamentos();window.scrollTo(0,0);
   setTimeout(()=>{
-    const chip=el('lc-acc-chip');
-    if(chip){chip.querySelector('span').textContent=accName;chip.style.display='flex';}
     // highlight filter pills correctly
     ['all','confirmados','agendados'].forEach(id=>{
       const p=el('lcf-'+id);if(p){p.classList.toggle('active',id==='all');p.classList.remove('inactive');}
@@ -2021,7 +2030,48 @@ function goToAccountLancamentos(accName){
 }
 function clearAccountFilter(){
   lcAccountFilter=null;
-  const chip=el('lc-acc-chip');if(chip)chip.style.display='none';
+  renderLancamentos();
+}
+function updateLcAccChip(){
+  const lbl=el('lc-acc-chip-lbl');const xBtn=el('lc-acc-chip-x');
+  if(!lbl)return;
+  if(lcAccountFilter){lbl.textContent=lcAccountFilter;if(xBtn)xBtn.style.display='inline';}
+  else{lbl.textContent='\u{1F3E6} Todas as contas \u25BE';if(xBtn)xBtn.style.display='none';}
+}
+// Popup para escolher/trocar a conta filtrada, aberto direto de dentro da aba Lan\u00e7amentos
+// (sem precisar voltar para a Vis\u00e3o Geral) \u2014 importante quando h\u00e1 mais de uma conta corrente.
+function toggleLcAccPopup(evt){
+  evt.stopPropagation();
+  const pop=el('acc-popup');
+  if(!pop)return;
+  if(_accPopupOpen){_closeAccPop();return;}
+  const allActive=!lcAccountFilter;
+  const allRow='<div class="acp-row" onclick="setLcAccountFilter(null)">'
+    +'<div class="acp-logo" style="background:var(--border);color:var(--t2)">&#x1F3E6;</div>'
+    +'<div><div class="acp-name" style="'+(allActive?'color:var(--green)':'')+'">Todas as contas</div><div class="acp-type">Ver lan\u00e7amentos de todas as contas</div></div>'
+    +(allActive?'<div style="color:var(--green);font-weight:700">&#x2713;</div>':'')
+    +'</div>';
+  const rows=ACCOUNTS.map(acc=>{
+    const active=lcAccountFilter===acc.name;
+    const logoHtml=acc.logo?'<img src="'+acc.logo+'">':acc.name.charAt(0).toUpperCase();
+    const t=ACCOUNT_TYPES.find(t=>t.id===acc.type)||ACCOUNT_TYPES[0];
+    return'<div class="acp-row" data-name="'+esc(acc.name)+'" onclick="setLcAccountFilter(this.dataset.name)">'
+      +'<div class="acp-logo" style="background:'+(acc.logo?'transparent':acc.color)+'">'+logoHtml+'</div>'
+      +'<div><div class="acp-name" style="'+(active?'color:var(--green)':'')+'">'+esc(acc.name)+'</div><div class="acp-type">'+t.label+'</div></div>'
+      +(active?'<div style="color:var(--green);font-weight:700">&#x2713;</div>':'')
+      +'</div>';
+  }).join('');
+  pop.innerHTML='<div class="acp-head"><span>Filtrar por conta</span><button class="acp-close" onclick="_closeAccPop()">&#x2715;</button></div>'+allRow+rows;
+  const chip=el('lc-acc-chip');
+  const rect=chip?chip.getBoundingClientRect():{top:80,left:20,bottom:100};
+  const popW=300;
+  const leftPos=Math.min(rect.left,window.innerWidth-popW-16);
+  pop.style.cssText='display:block;top:'+(rect.bottom+6)+'px;left:'+Math.max(leftPos,8)+'px;width:'+popW+'px';
+  _accPopupOpen=true;
+}
+function setLcAccountFilter(name){
+  lcAccountFilter=name||null;
+  _closeAccPop();
   renderLancamentos();
 }
 
@@ -2038,6 +2088,7 @@ function setLcFilter(f){
 }
 function renderLancamentos(){
   if(el('view-lancamentos').classList.contains('hidden'))return;
+  updateLcAccChip();
   const q=(el('lc-search')||{value:''}).value.toLowerCase();
   const allMonthTxs=getMonthTxs(S.year,S.month);
   const txs=allMonthTxs.filter(t=>{
@@ -2801,7 +2852,6 @@ function goPage(page,navEl,fromHistory){
   if(page==='overview')render();
   else if(page==='lancamentos'){
   lcAccountFilter=null;
-  const _chip=el('lc-acc-chip');if(_chip)_chip.style.display='none';
   render();renderLancamentos();
 }
   else if(page==='categorias'){renderCategorias();updateCatCounts();}
@@ -2813,7 +2863,7 @@ function goPage(page,navEl,fromHistory){
   window.scrollTo(0,0);
   if(!fromHistory)_navPush({t:'page',page:page});
 }
-function changeMonth(d){ovFilter='all';lcAccountFilter=null;const c=el('lc-acc-chip');if(c)c.style.display='none';
+function changeMonth(d){ovFilter='all';lcAccountFilter=null;
   S.month+=d;if(S.month>11){S.month=0;S.year++;}else if(S.month<0){S.month=11;S.year--;}
   render();renderLancamentos();renderPagar();renderRelatorios();
   const ml=el('mlbl');if(ml)ml.textContent=MONTHS[S.month]+' '+S.year;
