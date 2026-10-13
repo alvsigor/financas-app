@@ -1120,7 +1120,7 @@ function importLocalFile(event){
 }
 function autoSave(){
   try{
-    localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG}));
+    localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()}));
     ghSchedulePush();
   }catch(e){console.warn('autoSave failed',e);}
 }
@@ -1291,8 +1291,9 @@ async function ghPush(retry){
     const sm3=el('gh-status-msg');if(sm3)sm3.classList.remove('gh-syncing');
     ghSetStatus('Erro ao salvar: '+e.message,'err');
     showToast('Erro GitHub: '+e.message);
-    // Offline: marca sync pendente para tentar ao reconectar
-    if(!navigator.onLine){
+    // Marca sync pendente se for erro de rede (offline ou falha de fetch)
+    const isNetErr=!navigator.onLine||e instanceof TypeError;
+    if(isNetErr){
       localStorage.setItem('fin_pending_sync','1');
       const badge=el('sync-pending-badge');if(badge)badge.hidden=false;
     }
@@ -1352,12 +1353,32 @@ if(typeof window!=='undefined'){
     }
   });
 }
+
+// Força push imediato quando o app vai para segundo plano (Android/iOS PWA)
+// Evita que o timer de 800ms seja congelado pelo sistema antes de disparar
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){
+    clearTimeout(ghPushTimer);
+    if(GH.token&&GH.user&&GH.repo){
+      ghPush(); // fire-and-forget: o dado já está no localStorage, isso é só o upload
+    }
+  }
+});
+// Fallback para desktop: tenta push ao fechar/navegar para fora
+window.addEventListener('beforeunload',()=>{
+  if(GH.token&&GH.user&&GH.repo){
+    clearTimeout(ghPushTimer);
+    // sendBeacon não funciona com GitHub API (CORS), mas o fetch abaixo
+    // ainda tem chance de completar se o browser permitir
+    ghPush();
+  }
+});
 // Auto-push: 3s debounce after every autoSave()
 let ghPushTimer=null;
 function ghSchedulePush(){
   if(!GH.token||!GH.user||!GH.repo||!GH.autoSync)return;
   clearTimeout(ghPushTimer);
-  ghPushTimer=setTimeout(ghPush,3000);
+  ghPushTimer=setTimeout(ghPush,800);
 }
 
 // ========== CFG ==========
@@ -2928,6 +2949,85 @@ function editUserName(){
   updateSidebar();
   showToast('Nome atualizado: '+name);
 }
+// ========== STARTUP SYNC ==========
+// Substitui o ghPull() cego na inicialização.
+// Compara savedAt do localStorage com o do GitHub e faz merge se necessário,
+// evitando sobrescrever dados locais mais recentes.
+async function ghStartupSync(){
+  if(!GH.token||!GH.user||!GH.repo)return;
+  ghSetStatus('Sincronizando...','idle');
+  try{
+    const r=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
+    if(r.status===404){
+      ghSetStatus('Arquivo não encontrado — salvando dados locais...','idle');
+      showToast('Nenhum dado no GitHub ainda. Salvando...');
+      await ghPush();return;
+    }
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    GH.sha=d.sha||'';ghSaveConfigToStorage();
+    const b64=d.content.replace(/\n/g,'');
+    const bytes=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0));
+    const ghData=JSON.parse(new TextDecoder('utf-8').decode(bytes));
+    // Comparar timestamps: local vs GitHub
+    const localRaw=localStorage.getItem('fin_data');
+    const localData=localRaw?JSON.parse(localRaw):{};
+    const localTs=localData.savedAt?new Date(localData.savedAt).getTime():0;
+    const ghTs=ghData.savedAt?new Date(ghData.savedAt).getTime():0;
+    // Transações no local mas não no GitHub (por id)
+    const ghIds=new Set((ghData.txs||[]).map(t=>t.id));
+    const localOnly=(S.txs||[]).filter(t=>!ghIds.has(t.id));
+    if(localTs>ghTs||localOnly.length>0){
+      // Local é mais recente ou tem dados a mais — merge e push
+      if(localOnly.length>0){
+        ghData.txs=[...(ghData.txs||[]),...localOnly];
+        ghData.savedAt=new Date().toISOString();
+        // Atualiza estado em memória com merged
+        S.txs=ghData.txs;
+        if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
+        if(ghData.rules)RULES=ghData.rules;
+        if(ghData.cats){
+          if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
+          if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
+          if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
+        }
+        if(ghData.cfg)Object.assign(CFG,ghData.cfg);
+        localStorage.setItem('fin_data',JSON.stringify(ghData));
+        render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
+        showToast('✔ '+localOnly.length+' lançamento(s) local(is) enviado(s) ao GitHub!');
+      }else{
+        showToast('✔ Dados locais são mais recentes — salvando no GitHub...');
+      }
+      await ghPush();
+    }else{
+      // GitHub é mais recente — pull normal
+      if(ghData.txs)S.txs=ghData.txs;
+      if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
+      if(ghData.rules)RULES=ghData.rules;
+      if(ghData.cats){
+        if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
+        if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
+        if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
+      }
+      if(ghData.cfg)Object.assign(CFG,ghData.cfg);
+      localStorage.setItem('fin_data',JSON.stringify(ghData));
+      localStorage.setItem('gh_last_sync',new Date().toISOString());
+      render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
+      ghUpdateUI();
+      showToast('✔ '+S.txs.length+' lançamentos carregados do GitHub!');
+    }
+    localStorage.removeItem('fin_pending_sync');
+    const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
+    ghUpdateUI();
+  }catch(e){
+    // Erro de rede — preserva dados locais e marca sync pendente
+    localStorage.setItem('fin_pending_sync','1');
+    const badge=el('sync-pending-badge');if(badge)badge.hidden=false;
+    ghSetStatus('Offline — dados locais preservados','idle');
+    showToast('⚠️ Sem conexão — dados salvos localmente');
+  }
+}
+
 // ========== INIT ==========
 ghLoadConfig();
 const _loadedLocal=autoLoad();
@@ -2938,7 +3038,7 @@ buildContaSelect();
 renderConfig();
 checkAutoConfirm();
 if(GH.token&&GH.user&&GH.repo){
-  ghPull();
+  ghStartupSync(); // smart sync: compara timestamps, faz merge se necessário
 }else if(!_loadedLocal&&!localStorage.getItem('fin_welcomed')){
   setTimeout(showWelcomeBanner,600);
 }
