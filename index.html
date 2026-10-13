@@ -548,6 +548,11 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 @keyframes ghPulse{0%,100%{opacity:1}50%{opacity:.3}}
 .gh-syncing .gh-dot{animation:ghPulse 1s infinite}
 @media(max-width:820px){.mid-grid,.bot-grid{grid-template-columns:1fr!important}.right-col{grid-template-columns:1fr!important}}
+.sync-pill{position:fixed;left:12px;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:950;border:0;border-radius:999px;padding:7px 13px;font-size:12px;font-weight:700;font-family:inherit;box-shadow:0 4px 14px rgba(0,0,0,.35);cursor:pointer}
+.sync-pill.pend{background:#f59e0b;color:#111}
+.sync-pill.busy{background:#3b82f6;color:#fff}
+.sync-pill.err{background:#ef4444;color:#fff}
+@media(min-width:900px){.sync-pill{bottom:20px}}
 </style>
 </head>
 <body>
@@ -1121,6 +1126,7 @@ function importLocalFile(event){
 function autoSave(){
   try{
     localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()}));
+    ghMarkDirty();
     ghSchedulePush();
   }catch(e){console.warn('autoSave failed',e);}
 }
@@ -1216,170 +1222,214 @@ function ghSaveConfig(){
   }
 }
 
-async function ghPull(){
-  if(!GH.token||!GH.user||!GH.repo)return;
-  ghSetStatus('Carregando do GitHub...','idle');
-  try{
-    const r=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
-    if(r.status===404){
-      ghSetStatus('Arquivo n\u00e3o encontrado — ser\u00e1 criado no primeiro save','idle');
-      showToast('Nenhum dado no GitHub ainda. Salve primeiro.');
-      return;
-    }
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    GH.sha=d.sha||'';
-    ghSaveConfigToStorage();
-    // Decode base64 UTF-8 (handles accented chars: ç, ã, etc.)
-    const b64=d.content.replace(/\n/g,'');
-    const bytes=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0));
-    const raw=new TextDecoder('utf-8').decode(bytes);
-    const parsed=JSON.parse(raw);
-    if(parsed.txs)S.txs=parsed.txs;
-    // month/year NAO e restaurado do GitHub: sempre abre no mes vigente (data real de hoje)
-    if(parsed.accounts&&parsed.accounts.length)ACCOUNTS=parsed.accounts;
-    if(parsed.rules)RULES=parsed.rules;
-    if(parsed.cats){
-      if(parsed.cats.despesa)CATS.despesa=parsed.cats.despesa;
-      if(parsed.cats.receita)CATS.receita=parsed.cats.receita;
-      if(parsed.cats.transferencia)CATS.transferencia=parsed.cats.transferencia;
-      if(!CATS.transferencia)CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T||[]));
-    }
-    if(parsed.cfg)Object.assign(CFG,parsed.cfg);
-    localStorage.setItem('fin_data',JSON.stringify(parsed));
-    localStorage.setItem('gh_last_sync',new Date().toISOString());
-    render();updateRuleBadges();try{updateCatCounts();}catch(e){console.warn('updateCatCounts',e);}buildContaSelect();renderConfig();checkAutoConfirm();
-    ghUpdateUI();
-    showToast('\u2714 '+S.txs.length+' lan\u00e7amentos carregados do GitHub!');
-  }catch(e){
-    ghSetStatus('Erro ao carregar: '+e.message,'err');
-    showToast('Erro GitHub: '+e.message);
-  }
+// ========== SYNC (GitHub) ==========
+// Modelo: o aparelho e a fonte da verdade do que foi digitado nele. Toda alteracao
+// marca o aparelho como "sujo" (fin_dirty). A sync le o GitHub, faz merge de 3 vias
+// (base = ultimo estado sincronizado, guardado em fin_base) e so entao grava.
+// Nunca sobrescreve dado local nao enviado.
+
+// base64 UTF-8 em blocos (o antigo fromCharCode com spread dos bytes estourava a pilha
+// com arquivos > ~150 KB: "Maximum call stack size exceeded")
+function b64EncodeUtf8(str){
+  const bytes=new TextEncoder().encode(str);
+  let bin='';const CH=0x8000;
+  for(let i=0;i<bytes.length;i+=CH)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+CH));
+  return btoa(bin);
+}
+function b64DecodeUtf8(b64){
+  const bin=atob(String(b64||'').replace(/\s/g,''));
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
 }
 
-async function ghPush(retry){
-  if(!GH.token||!GH.user||!GH.repo)return;
+let _syncBusy=false,_syncAgain=false,_localRev=0,_syncErr='',_lastSyncOk=0;
+function ghIsDirty(){
+  return localStorage.getItem('fin_dirty')==='1'
+    ||localStorage.getItem('fin_pending_sync')==='1'
+    ||!localStorage.getItem('fin_base'); // 1a execucao desta versao: faz merge (uniao), nunca descarta
+}
+function ghMarkDirty(){_localRev++;try{localStorage.setItem('fin_dirty','1');}catch(e){}ghUpdateBadge();}
+function ghMarkClean(){try{localStorage.removeItem('fin_dirty');localStorage.removeItem('fin_pending_sync');}catch(e){}ghUpdateBadge();}
+function ghGetBase(){try{return JSON.parse(localStorage.getItem('fin_base')||'null');}catch(e){return null;}}
+function ghSetBase(d){try{localStorage.setItem('fin_base',JSON.stringify(ghCore(d)));}catch(e){console.warn('fin_base',e);}}
+function ghCore(d){d=d||{};return {txs:d.txs||[],accounts:d.accounts||[],rules:d.rules||[],cats:d.cats||{},cfg:d.cfg||{}};}
+function ghLocalCore(){return ghCore({txs:S.txs,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG});}
+
+function ghUpdateBadge(){
+  const configured=!!(GH.token&&GH.user&&GH.repo);
+  const dirty=configured&&ghIsDirty();
+  const b=el('sync-pending-badge');if(b)b.hidden=!dirty;
+  const p=el('sync-pill');if(!p)return;
+  let txt='',cls='';
+  if(!configured){p.hidden=true;return;}
+  if(_syncBusy){txt='↻ Sincronizando...';cls='busy';}
+  else if(_syncErr){txt='⚠ Não sincronizado — tocar p/ tentar';cls='err';}
+  else if(dirty){txt=navigator.onLine?'⏳ Enviando...':'⏳ Offline — salvo no aparelho';cls='pend';}
+  p.hidden=!txt;p.textContent=txt;p.className='sync-pill '+cls;
+}
+
+// merge de 3 vias por id
+function ghMergeById(baseArr,localArr,remoteArr,hasBase){
+  const J=JSON.stringify,key=(x,i)=>(x&&x.id!=null)?String(x.id):'__'+J(x);
+  const bMap=new Map((baseArr||[]).map((x,i)=>[key(x,i),J(x)]));
+  const lMap=new Map((localArr||[]).map((x,i)=>[key(x,i),x]));
+  const rMap=new Map((remoteArr||[]).map((x,i)=>[key(x,i),x]));
+  const out=[];
+  const decide=(k)=>{
+    const l=lMap.get(k),r=rMap.get(k),b=bMap.get(k);
+    if(l&&r){
+      if(!hasBase)return r;                 // sem base: versoes iguais na maioria, fica a do GitHub
+      return J(l)!==b?l:r;                  // editado aqui -> local; senao -> remoto
+    }
+    if(l){ // so existe aqui
+      if(hasBase&&b!==undefined&&J(l)===b)return null; // foi apagado no outro aparelho
+      return l;                                         // novo (ou editado) aqui
+    }
+    if(hasBase&&b!==undefined&&J(r)===b)return null;   // foi apagado aqui
+    return r;                                           // novo no outro aparelho
+  };
+  const seen=new Set();
+  for(const k of rMap.keys()){seen.add(k);const v=decide(k);if(v)out.push(v);}
+  for(const k of lMap.keys()){if(seen.has(k))continue;const v=decide(k);if(v)out.push(v);}
+  return out;
+}
+function ghMergeObj(b,l,r,hasBase){
+  const J=JSON.stringify;
+  if(r===undefined)return l;
+  if(!hasBase)return r;
+  return J(l)!==J(b)?l:r;
+}
+function ghMerge(base,local,remote){
+  const hb=!!base;base=base||{};
+  return {
+    txs:ghMergeById(base.txs,local.txs,remote.txs,hb),
+    accounts:ghMergeById(base.accounts,local.accounts,remote.accounts,hb),
+    rules:ghMergeById(base.rules,local.rules,remote.rules,hb),
+    cats:ghMergeObj(base.cats,local.cats,remote.cats,hb),
+    cfg:ghMergeObj(base.cfg,local.cfg,remote.cfg,hb),
+  };
+}
+
+function ghApplyData(d){
+  S.txs=d.txs||[];
+  if(d.accounts&&d.accounts.length)ACCOUNTS=d.accounts;
+  if(d.rules)RULES=d.rules;
+  if(d.cats){
+    if(d.cats.despesa)CATS.despesa=d.cats.despesa;
+    if(d.cats.receita)CATS.receita=d.cats.receita;
+    if(d.cats.transferencia)CATS.transferencia=d.cats.transferencia;
+    if(!CATS.transferencia)CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T||[]));
+  }
+  if(d.cfg)Object.assign(CFG,d.cfg);
+  try{localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()}));}catch(e){console.warn('fin_data',e);}
+  try{render();updateRuleBadges();try{updateCatCounts();}catch(e){}buildContaSelect();renderConfig();checkAutoConfirm();
+    if(typeof renderLancamentos==='function')try{renderLancamentos();}catch(e){}
+  }catch(e){console.warn('render apos sync',e);}
+}
+
+async function ghReadRemote(){
+  const r=await fetch(ghApiUrl(),{headers:ghHeaders(),cache:'no-store',signal:AbortSignal.timeout(15000)});
+  if(r.status===404)return {data:null,sha:''};
+  if(!r.ok)throw new Error('GitHub respondeu HTTP '+r.status+' ao ler');
+  const d=await r.json();
+  let content=d.content;
+  if(!content&&d.git_url){ // arquivos > 1 MB: a Contents API nao manda o conteudo, busca o blob
+    const rb=await fetch(d.git_url,{headers:ghHeaders(),cache:'no-store',signal:AbortSignal.timeout(20000)});
+    if(!rb.ok)throw new Error('HTTP '+rb.status+' ao ler blob');
+    content=(await rb.json()).content;
+  }
+  return {data:JSON.parse(b64DecodeUtf8(content)),sha:d.sha||''};
+}
+
+async function ghSync(opts){
+  opts=opts||{};
+  if(!GH.token||!GH.user||!GH.repo)return false;
+  if(_syncBusy){_syncAgain=true;return false;}
+  _syncBusy=true;_syncErr='';ghUpdateBadge();
   const sm=el('gh-status-msg');if(sm)sm.classList.add('gh-syncing');
-  ghSetStatus('Salvando...','idle');
-  const data={v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()};
-  // Encode UTF-8 base64 (handles ç, ã, etc.)
-  const jsonStr=JSON.stringify(data,null,2);
-  const bytes=new TextEncoder().encode(jsonStr);
-  const b64=btoa(String.fromCharCode(...bytes));
-  const body={message:'financas: auto-save '+new Date().toISOString(),content:b64};
-  if(GH.sha)body.sha=GH.sha; // REQUIRED for updates — 409 without it
+  ghSetStatus('Sincronizando...','idle');
+  let ok=false,pushed=false,pulled=false,mergedNew=0;
   try{
-    const r=await fetch(ghApiUrl(),{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
-    if(!r.ok){
-      const err=await r.json();
-      const msg=err.message||'HTTP '+r.status;
-      // sha desatualizado (arquivo mudou desde a ultima vez que lemos): busca o sha
-      // atual e tenta salvar de novo, uma unica vez, sem precisar o usuario fazer nada.
-      if(!retry&&/does not match|sha/i.test(msg)){
-        const rf=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
-        if(rf.ok){const df=await rf.json();GH.sha=df.sha||GH.sha;ghSaveConfigToStorage();return ghPush(true);}
+    for(let attempt=0;attempt<3&&!ok;attempt++){
+      const {data:remoteRaw,sha}=await ghReadRemote();
+      const remote=remoteRaw?ghCore(remoteRaw):null;
+      const rev=_localRev;
+      const local=ghLocalCore();
+      const dirty=ghIsDirty();
+      let result;
+      if(!remote)result=local;
+      else if(!dirty)result=remote;
+      else result=ghMerge(ghGetBase(),local,remote);
+      const J=JSON.stringify;
+      if(J(result)!==J(local)){
+        if(remote){const lIds=new Set(local.txs.map(t=>t.id));mergedNew=result.txs.filter(t=>!lIds.has(t.id)).length;}
+        ghApplyData(result);pulled=true;
       }
-      throw new Error(msg);
+      if(remote&&J(result)===J(remote)){
+        GH.sha=sha;ghSaveConfigToStorage();ghSetBase(result);
+        if(_localRev===rev)ghMarkClean();else _syncAgain=true;
+        ok=true;break;
+      }
+      const payload={v:2,...result,month:S.month,year:S.year,savedAt:new Date().toISOString()};
+      const body={message:'financas: sync '+payload.savedAt,content:b64EncodeUtf8(JSON.stringify(payload))};
+      if(sha)body.sha=sha;
+      const p=await fetch(ghApiUrl(),{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});
+      if(p.status===409||p.status===422){continue;} // GitHub mudou no meio do caminho: le e mescla de novo
+      if(!p.ok){const err=await p.json().catch(()=>({}));throw new Error(err.message||('HTTP '+p.status+' ao salvar'));}
+      const pd=await p.json();
+      GH.sha=(pd.content&&pd.content.sha)||'';ghSaveConfigToStorage();
+      ghSetBase(result);
+      if(_localRev===rev)ghMarkClean();else _syncAgain=true;
+      pushed=true;ok=true;
     }
-    const d=await r.json();
-    GH.sha=d.content?.sha||GH.sha;
-    ghSaveConfigToStorage();
+    if(!ok)throw new Error('conflito repetido com o GitHub');
+    _lastSyncOk=Date.now();
     localStorage.setItem('gh_last_sync',new Date().toISOString());
     ghUpdateUI();
-    showToast('\u2714 Dados salvos no GitHub!');
+    if(pushed)showToast('✔ Salvo no GitHub');
+    else if(pulled&&mergedNew)showToast('✔ '+mergedNew+' lançamento(s) novo(s) de outro aparelho');
+    else if(opts.manual)showToast('✔ Tudo sincronizado');
   }catch(e){
-    const sm3=el('gh-status-msg');if(sm3)sm3.classList.remove('gh-syncing');
-    ghSetStatus('Erro ao salvar: '+e.message,'err');
-    showToast('Erro GitHub: '+e.message);
-    // Marca sync pendente se for erro de rede (offline ou falha de fetch)
-    const isNetErr=!navigator.onLine||e instanceof TypeError;
-    if(isNetErr){
-      localStorage.setItem('fin_pending_sync','1');
-      const badge=el('sync-pending-badge');if(badge)badge.hidden=false;
-    }
+    const net=!navigator.onLine||e instanceof TypeError||e.name==='TimeoutError'||e.name==='AbortError';
+    try{localStorage.setItem('fin_pending_sync','1');}catch(x){}
+    _syncErr=net?'':(e.message||String(e));
+    ghSetStatus(net?'Offline — lançamentos guardados no aparelho':'Erro na sync: '+_syncErr,net?'idle':'err');
+    if(!net||opts.manual)showToast(net?'Sem conexão — dados guardados no aparelho, envio automático depois':'Erro GitHub: '+_syncErr);
+    console.warn('ghSync',e);
+  }finally{
+    _syncBusy=false;
+    const sm2=el('gh-status-msg');if(sm2)sm2.classList.remove('gh-syncing');
+    ghUpdateBadge();
+    if(_syncAgain){_syncAgain=false;ghSchedulePush();}
   }
+  return ok;
 }
 
-// ========== OFFLINE SYNC ==========
-async function ghMergeAndPush(){
-  if(!GH.token||!GH.user||!GH.repo)return;
-  try{
-    ghSetStatus('Sincronizando dados offline...','idle');
-    const r=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    GH.sha=d.sha||'';ghSaveConfigToStorage();
-    const b64=d.content.replace(/\n/g,'');
-    const bytes=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0));
-    const ghData=JSON.parse(new TextDecoder('utf-8').decode(bytes));
-    const ghIds=new Set((ghData.txs||[]).map(t=>t.id));
-    const localOnly=S.txs.filter(t=>!ghIds.has(t.id));
-    if(localOnly.length===0){
-      localStorage.removeItem('fin_pending_sync');
-      const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
-      ghSetStatus('\u2714 J\u00e1 sincronizado','ok');return;
-    }
-    ghData.txs=[...(ghData.txs||[]),...localOnly];
-    ghData.savedAt=new Date().toISOString();
-    S.txs=ghData.txs;
-    if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
-    if(ghData.rules)RULES=ghData.rules;
-    if(ghData.cats){
-      if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
-      if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
-      if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
-    }
-    if(ghData.cfg)Object.assign(CFG,ghData.cfg);
-    localStorage.setItem('fin_data',JSON.stringify(ghData));
-    await ghPush();
-    localStorage.removeItem('fin_pending_sync');
-    const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
-    render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
-    showToast('\u2714 '+localOnly.length+' lan\u00e7amento(s) sincronizado(s)!');
-  }catch(e){
-    ghSetStatus('Erro no sync offline: '+e.message,'err');
-    showToast('Erro sync offline: '+e.message);
-  }
-}
-window.addEventListener('online',()=>{
-  if(localStorage.getItem('fin_pending_sync')==='1'&&GH.token&&GH.user&&GH.repo){
-    setTimeout(ghMergeAndPush,1500);
-  }
-});
-if(typeof window!=='undefined'){
-  window.addEventListener('load',()=>{
-    if(navigator.onLine&&localStorage.getItem('fin_pending_sync')==='1'&&GH.token&&GH.user&&GH.repo){
-      setTimeout(ghMergeAndPush,2000);
-    }
-  });
-}
+// compatibilidade com botoes/chamadas antigas
+async function ghPush(){return ghSync({manual:true});}
+async function ghPull(){return ghSync({manual:true});}
 
-// Força push imediato quando o app vai para segundo plano (Android/iOS PWA)
-// Evita que o timer de 800ms seja congelado pelo sistema antes de disparar
-document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='hidden'){
-    clearTimeout(ghPushTimer);
-    if(GH.token&&GH.user&&GH.repo){
-      ghPush(); // fire-and-forget: o dado já está no localStorage, isso é só o upload
-    }
-  }
-});
-// Fallback para desktop: tenta push ao fechar/navegar para fora
-window.addEventListener('beforeunload',()=>{
-  if(GH.token&&GH.user&&GH.repo){
-    clearTimeout(ghPushTimer);
-    // sendBeacon não funciona com GitHub API (CORS), mas o fetch abaixo
-    // ainda tem chance de completar se o browser permitir
-    ghPush();
-  }
-});
-// Auto-push: 3s debounce after every autoSave()
 let ghPushTimer=null;
-function ghSchedulePush(){
+function ghSchedulePush(delay){
   if(!GH.token||!GH.user||!GH.repo||!GH.autoSync)return;
   clearTimeout(ghPushTimer);
-  ghPushTimer=setTimeout(ghPush,800);
+  ghPushTimer=setTimeout(()=>ghSync(),delay==null?1000:delay);
 }
+
+// reconectou -> envia o pendente
+window.addEventListener('online',()=>{ghUpdateBadge();setTimeout(()=>ghSync(),1000);});
+window.addEventListener('offline',ghUpdateBadge);
+// saindo do app (Android congela o JS em segundo plano): envia ja
+// voltando ao app: sincroniza (pega o que veio de outro aparelho)
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='hidden'){
+    if(ghIsDirty()){clearTimeout(ghPushTimer);ghSync();}
+  }else if(Date.now()-_lastSyncOk>20000||ghIsDirty()){
+    ghSchedulePush(300);
+  }
+});
+window.addEventListener('pagehide',()=>{if(ghIsDirty()){clearTimeout(ghPushTimer);ghSync();}});
 
 // ========== CFG ==========
 const CFG={curmonth:true,confirm:true,projected:true};
@@ -2949,85 +2999,6 @@ function editUserName(){
   updateSidebar();
   showToast('Nome atualizado: '+name);
 }
-// ========== STARTUP SYNC ==========
-// Substitui o ghPull() cego na inicialização.
-// Compara savedAt do localStorage com o do GitHub e faz merge se necessário,
-// evitando sobrescrever dados locais mais recentes.
-async function ghStartupSync(){
-  if(!GH.token||!GH.user||!GH.repo)return;
-  ghSetStatus('Sincronizando...','idle');
-  try{
-    const r=await fetch(ghApiUrl(),{headers:ghHeaders(),signal:AbortSignal.timeout(12000)});
-    if(r.status===404){
-      ghSetStatus('Arquivo não encontrado — salvando dados locais...','idle');
-      showToast('Nenhum dado no GitHub ainda. Salvando...');
-      await ghPush();return;
-    }
-    if(!r.ok)throw new Error('HTTP '+r.status);
-    const d=await r.json();
-    GH.sha=d.sha||'';ghSaveConfigToStorage();
-    const b64=d.content.replace(/\n/g,'');
-    const bytes=Uint8Array.from(atob(b64),ch=>ch.charCodeAt(0));
-    const ghData=JSON.parse(new TextDecoder('utf-8').decode(bytes));
-    // Comparar timestamps: local vs GitHub
-    const localRaw=localStorage.getItem('fin_data');
-    const localData=localRaw?JSON.parse(localRaw):{};
-    const localTs=localData.savedAt?new Date(localData.savedAt).getTime():0;
-    const ghTs=ghData.savedAt?new Date(ghData.savedAt).getTime():0;
-    // Transações no local mas não no GitHub (por id)
-    const ghIds=new Set((ghData.txs||[]).map(t=>t.id));
-    const localOnly=(S.txs||[]).filter(t=>!ghIds.has(t.id));
-    if(localTs>ghTs||localOnly.length>0){
-      // Local é mais recente ou tem dados a mais — merge e push
-      if(localOnly.length>0){
-        ghData.txs=[...(ghData.txs||[]),...localOnly];
-        ghData.savedAt=new Date().toISOString();
-        // Atualiza estado em memória com merged
-        S.txs=ghData.txs;
-        if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
-        if(ghData.rules)RULES=ghData.rules;
-        if(ghData.cats){
-          if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
-          if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
-          if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
-        }
-        if(ghData.cfg)Object.assign(CFG,ghData.cfg);
-        localStorage.setItem('fin_data',JSON.stringify(ghData));
-        render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
-        showToast('✔ '+localOnly.length+' lançamento(s) local(is) enviado(s) ao GitHub!');
-      }else{
-        showToast('✔ Dados locais são mais recentes — salvando no GitHub...');
-      }
-      await ghPush();
-    }else{
-      // GitHub é mais recente — pull normal
-      if(ghData.txs)S.txs=ghData.txs;
-      if(ghData.accounts&&ghData.accounts.length)ACCOUNTS=ghData.accounts;
-      if(ghData.rules)RULES=ghData.rules;
-      if(ghData.cats){
-        if(ghData.cats.despesa)CATS.despesa=ghData.cats.despesa;
-        if(ghData.cats.receita)CATS.receita=ghData.cats.receita;
-        if(ghData.cats.transferencia)CATS.transferencia=ghData.cats.transferencia;
-      }
-      if(ghData.cfg)Object.assign(CFG,ghData.cfg);
-      localStorage.setItem('fin_data',JSON.stringify(ghData));
-      localStorage.setItem('gh_last_sync',new Date().toISOString());
-      render();updateRuleBadges();try{updateCatCounts();}catch(ex){}buildContaSelect();renderConfig();checkAutoConfirm();
-      ghUpdateUI();
-      showToast('✔ '+S.txs.length+' lançamentos carregados do GitHub!');
-    }
-    localStorage.removeItem('fin_pending_sync');
-    const badge=el('sync-pending-badge');if(badge)badge.hidden=true;
-    ghUpdateUI();
-  }catch(e){
-    // Erro de rede — preserva dados locais e marca sync pendente
-    localStorage.setItem('fin_pending_sync','1');
-    const badge=el('sync-pending-badge');if(badge)badge.hidden=false;
-    ghSetStatus('Offline — dados locais preservados','idle');
-    showToast('⚠️ Sem conexão — dados salvos localmente');
-  }
-}
-
 // ========== INIT ==========
 ghLoadConfig();
 const _loadedLocal=autoLoad();
@@ -3038,7 +3009,8 @@ buildContaSelect();
 renderConfig();
 checkAutoConfirm();
 if(GH.token&&GH.user&&GH.repo){
-  ghStartupSync(); // smart sync: compara timestamps, faz merge se necessário
+  ghUpdateBadge();
+  ghSync(); // le o GitHub, mescla com o que esta no aparelho e so entao grava
 }else if(!_loadedLocal&&!localStorage.getItem('fin_welcomed')){
   setTimeout(showWelcomeBanner,600);
 }
@@ -3089,6 +3061,7 @@ if(GH.token&&GH.user&&GH.repo){
   </div>
 </div>
 <div id="acc-popup"></div>
+<button id="sync-pill" class="sync-pill" hidden onclick="ghSync({manual:true})"></button>
 <script>
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
