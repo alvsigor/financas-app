@@ -553,6 +553,24 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 .sync-pill.busy{background:#3b82f6;color:#fff}
 .sync-pill.err{background:#ef4444;color:#fff}
 @media(min-width:900px){.sync-pill{bottom:20px}}
+.acc-sum{display:block;cursor:default;padding:10px 14px}
+.acc-sum:hover{background:var(--surface);border-color:var(--border)}
+.acc-sum-hd{font-size:10px;font-weight:700;color:var(--t3);letter-spacing:.06em;text-transform:uppercase;margin:0 4px 4px}
+.acc-sum-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:2px 20px;min-width:0}
+.acc-sum-row{display:flex;align-items:center;gap:10px;padding:6px 4px;border-radius:8px;cursor:pointer;min-width:0}
+.acc-sum-row:hover{background:rgba(255,255,255,.04)}
+.acc-sum-row .acp-logo{width:30px;height:30px;font-size:12px}
+.acc-sum-nm{flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-sum-v{text-align:right;flex-shrink:0}
+.acc-sum-c{font-family:var(--mono);font-size:14px;font-weight:700}
+.acc-sum-p{font-family:var(--mono);font-size:10.5px;color:var(--t2)}
+.lc-sum{margin:14px 12px 22px;border:1px solid var(--border);border-radius:10px;background:var(--surface);padding:12px 14px}
+.lc-sum-hd{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
+.lc-sum-r{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:12.5px;color:var(--t2);padding:3px 0}
+.lc-sum-r span:last-child{font-family:var(--mono);font-weight:600;white-space:nowrap}
+.lc-sum-b{font-size:13.5px;color:var(--t1);font-weight:700}
+.lc-sum-b span:last-child{font-weight:800}
+.lc-sum-sep{border-top:1px solid var(--border);margin:7px 0}
 </style>
 </head>
 <body>
@@ -594,7 +612,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
       <div class="card"><div class="clbl"><div class="ci ci-r">&#x2193;</div> Despesas</div><div class="cval vr" id="c-dep">0,00</div><div class="cft" id="c-dep-sub">--</div></div>
       <div class="card"><div class="clbl"><div class="ci ci-p">&#x2248;</div> Resultado</div><div class="cval vg" id="c-res">0,00</div><div class="cft">Receitas menos despesas</div></div>
     </div>
-    <div class="acc-pill" id="acc-pill" onclick="toggleAccPopup(event)"><div class="nub" id="pill-nub" style="overflow:hidden">N</div><div><div class="ap-nm" id="pill-name">Nubank</div><div class="ap-tp" id="pill-type">Conta corrente</div></div><div class="ap-r"><div class="ap-c" id="ap-conf">R$ 0,00</div><div class="ap-p" id="ap-p">Projetado: <span id="ap-proj">0,00</span></div></div></div>
+    <div class="acc-pill acc-sum" id="acc-pill"><div class="acc-sum-hd" id="acc-sum-hd">Contas correntes</div><div class="acc-sum-list" id="acc-sum-list"></div></div>
     <div class="mid-grid">
       <div class="card">
         <div class="card-head"><div><div class="card-title">Fluxo de Caixa</div><div class="card-sub" id="fluxo-sub">Saldo do m&#234;s</div></div><div style="font-size:12px;font-family:var(--mono);font-weight:700;color:var(--green)" id="fluxo-end">R$ 0,00</div></div>
@@ -743,7 +761,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
           <button class="gh-btn" onclick="ghPull()">&#x2B07; Carregar do GitHub</button>
           <button class="gh-btn primary" onclick="ghPush()">&#x2B06; Salvar no GitHub</button>
         </div>
-        <span id="sync-pending-badge" hidden style="background:#f59e0b;color:#000;font-size:10px;padding:2px 7px;border-radius:9px;font-weight:700;margin-right:6px;vertical-align:middle">⏳ sync pendente</span><div class="gh-status" id="gh-status-msg"><div class="gh-dot gh-dot-idle"></div><span>N&#227;o conectado</span></div>
+        <span id="sync-pending-badge" hidden style="align-self:flex-start;width:fit-content;background:#f59e0b;color:#000;font-size:10px;padding:2px 7px;border-radius:9px;font-weight:700;margin-right:6px;vertical-align:middle">⏳ sync pendente</span><div class="gh-status" id="gh-status-msg"><div class="gh-dot gh-dot-idle"></div><span>N&#227;o conectado</span></div>
       </div>
 
       <div class="cfg-section" style="grid-column:1/-1">
@@ -1265,7 +1283,7 @@ function ghUpdateBadge(){
   if(!configured){p.hidden=true;return;}
   if(_syncBusy){txt='↻ Sincronizando...';cls='busy';}
   else if(_syncErr){txt='⚠ Não sincronizado — tocar p/ tentar';cls='err';}
-  else if(dirty){txt=navigator.onLine?'⏳ Enviando...':'⏳ Offline — salvo no aparelho';cls='pend';}
+  else if(dirty){const failed=localStorage.getItem('fin_pending_sync')==='1';txt=(!navigator.onLine||failed)?'\u23F3 Sem conex\u00e3o \u2014 salvo no aparelho':'\u23F3 Enviando...';cls='pend';}
   p.hidden=!txt;p.textContent=txt;p.className='sync-pill '+cls;
 }
 
@@ -1328,14 +1346,22 @@ function ghApplyData(d){
   }catch(e){console.warn('render apos sync',e);}
 }
 
+// fetch com tempo limite sem AbortSignal: AbortSignal.timeout nao existe em iPhone com iOS < 16
+// e nao pode ser repassado em ambientes que encaminham o fetch (ex.: visualizador de HTML do Claude)
+function ghFetch(url,opts,ms){
+  return new Promise((res,rej)=>{
+    const t=setTimeout(()=>{const e=new Error('tempo esgotado ('+Math.round((ms||15000)/1000)+' s)');e.name='TimeoutError';rej(e);},ms||15000);
+    fetch(url,opts).then(r=>{clearTimeout(t);res(r);},e=>{clearTimeout(t);rej(e);});
+  });
+}
 async function ghReadRemote(){
-  const r=await fetch(ghApiUrl(),{headers:ghHeaders(),cache:'no-store',signal:AbortSignal.timeout(15000)});
+  const r=await ghFetch(ghApiUrl(),{headers:ghHeaders(),cache:'no-store'},15000);
   if(r.status===404)return {data:null,sha:''};
   if(!r.ok)throw new Error('GitHub respondeu HTTP '+r.status+' ao ler');
   const d=await r.json();
   let content=d.content;
   if(!content&&d.git_url){ // arquivos > 1 MB: a Contents API nao manda o conteudo, busca o blob
-    const rb=await fetch(d.git_url,{headers:ghHeaders(),cache:'no-store',signal:AbortSignal.timeout(20000)});
+    const rb=await ghFetch(d.git_url,{headers:ghHeaders(),cache:'no-store'},20000);
     if(!rb.ok)throw new Error('HTTP '+rb.status+' ao ler blob');
     content=(await rb.json()).content;
   }
@@ -1374,7 +1400,7 @@ async function ghSync(opts){
       const payload={v:2,...result,month:S.month,year:S.year,savedAt:new Date().toISOString()};
       const body={message:'financas: sync '+payload.savedAt,content:b64EncodeUtf8(JSON.stringify(payload))};
       if(sha)body.sha=sha;
-      const p=await fetch(ghApiUrl(),{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});
+      const p=await ghFetch(ghApiUrl(),{method:'PUT',headers:ghHeaders(),body:JSON.stringify(body)},25000);
       if(p.status===409||p.status===422){continue;} // GitHub mudou no meio do caminho: le e mescla de novo
       if(!p.ok){const err=await p.json().catch(()=>({}));throw new Error(err.message||('HTTP '+p.status+' ao salvar'));}
       const pd=await p.json();
@@ -1391,7 +1417,10 @@ async function ghSync(opts){
     else if(pulled&&mergedNew)showToast('✔ '+mergedNew+' lançamento(s) novo(s) de outro aparelho');
     else if(opts.manual)showToast('✔ Tudo sincronizado');
   }catch(e){
-    const net=!navigator.onLine||e instanceof TypeError||e.name==='TimeoutError'||e.name==='AbortError';
+    // erro de rede: o navegador costuma lancar TypeError, mas alguns ambientes (visualizador do Claude,
+    // WebViews) lancam um Error comum so com a mensagem. Por isso olha tambem o texto.
+    const net=!navigator.onLine||e instanceof TypeError||e.name==='TimeoutError'||e.name==='AbortError'
+      ||/failed to fetch|load failed|networkerror|network request failed|network error|internet/i.test(String(e&&e.message||e));
     try{localStorage.setItem('fin_pending_sync','1');}catch(x){}
     _syncErr=net?'':(e.message||String(e));
     ghSetStatus(net?'Offline — lançamentos guardados no aparelho':'Erro na sync: '+_syncErr,net?'idle':'err');
@@ -1437,7 +1466,7 @@ function toggleCfg(key){
   CFG[key]=!CFG[key];
   renderConfig();
   if(key==='curmonth'&&CFG.curmonth){const d=new Date();S.month=d.getMonth();S.year=d.getFullYear();render();showToast('M\u00eas atual: '+MONTHS[S.month]+' '+S.year);}
-  if(key==='projected'){const vis=CFG.projected?'':'none';[el('ap-p'),el('c-saldo-proj')].forEach(e=>{if(e)e.style.display=vis;});showToast(CFG.projected?'Saldo projetado vis\u00edvel':'Saldo projetado oculto');}
+  if(key==='projected'){const vis=CFG.projected?'':'none';[el('ap-p'),el('c-saldo-proj')].forEach(e=>{if(e)e.style.display=vis;});try{renderAccSummary();}catch(e){}showToast(CFG.projected?'Saldo projetado vis\u00edvel':'Saldo projetado oculto');}
   if(key==='confirm')showToast(CFG.confirm?'Confirma\u00e7\u00e3o ativada':'Exclus\u00f5es sem confirma\u00e7\u00e3o');
 }
 function renderConfig(){
@@ -1879,54 +1908,8 @@ function render(){
   // sub info
   setT('c-rec-sub',budgetTxsOv.filter(t=>t.type==='receita').length+' receitas no m\u00eas');
   setT('c-dep-sub',budgetTxsOv.filter(t=>t.type==='despesa').length+' despesas no m\u00eas');
-  // account pill
-  const mainAcc=ACCOUNTS[0];
-  const mainBal=mainAcc?calcMonthBalance(mainAcc.name,S.year,S.month):{conf:0,proj:0};
-  const pillName=el('pill-name');const pillType=el('pill-type');
-  const apConf=el('ap-conf');const apProj=el('ap-proj');const apP=el('ap-p');
-  const pn=el('pill-nub'),lcn=el('lc-nub');
-  if(ACCOUNTS.length>1){
-    // Multiple accounts: show stacked icon
-    const stackHtml='<div style="display:flex;gap:-4px">'
-      +ACCOUNTS.slice(0,3).map((a,i)=>'<div style="width:18px;height:18px;border-radius:50%;background:'+a.color+';border:2px solid var(--card);margin-left:'+(i>0?'-6px':'0')+';display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:900;color:#fff;overflow:hidden;flex-shrink:0">'+(a.logo?'<img src="'+a.logo+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%">':a.name.charAt(0).toUpperCase())+'</div>').join('')
-      +'</div>';
-    if(pn){pn.innerHTML=stackHtml;pn.style.background='transparent';pn.style.overflow='visible';}
-    if(lcn){lcn.innerHTML=stackHtml;lcn.style.background='transparent';lcn.style.overflow='visible';}
-  }else if(mainAcc){
-    const li=mainAcc.logo?'<img src="'+mainAcc.logo+'">':mainAcc.name.charAt(0).toUpperCase();
-    const bg=mainAcc.logo?'transparent':mainAcc.color;
-    [pn,lcn].forEach(n=>{if(n){n.innerHTML=li;n.style.background=bg;n.style.overflow='hidden';}});
-  }
-  if(ACCOUNTS.length===1&&mainAcc){
-    if(pillName)pillName.textContent=mainAcc.name;
-    if(pillType){const t=ACCOUNT_TYPES.find(t=>t.id===mainAcc.type);pillType.textContent=t?t.label:'Conta';}
-  }else{
-    const budgetN=ACCOUNTS.filter(isBudgetAcc).length;
-    if(pillName)pillName.textContent=(budgetN===ACCOUNTS.length?'Total (':'Or\u00e7amento (')+budgetN+' conta'+(budgetN!==1?'s':'')+')';
-    if(pillType)pillType.textContent='Saldo consolidado';
-  }
-  const dispBal=ACCOUNTS.length===1?mainBal:saldo;
-  const bc=dispBal.conf,br=Math.floor(Math.abs(bc)/100),bcc=Math.abs(bc)%100;
-  if(apConf)apConf.textContent=(bc<0?'-':'')+'R$ '+br.toLocaleString('pt-BR')+','+String(bcc).padStart(2,'0');
-  const pp=dispBal.proj,ppr=Math.floor(Math.abs(pp)/100),ppc=Math.abs(pp)%100;
-  if(apProj)apProj.textContent=(pp<0?'-':'')+'R$ '+ppr.toLocaleString('pt-BR')+','+String(ppc).padStart(2,'0');
-  if(apP)apP.style.display=CFG.projected?'':'none';
-  // Contas a parte (poupanca, investimentos, cripto, reserva...): mostradas so como nota,
-  // nao entram no orcamento/projetado do mes.
-  const apartElId='ap-apart';
-  let apart=el(apartElId);
-  const contasAparte=ACCOUNTS.filter(a=>!isBudgetAcc(a));
-  if(contasAparte.length){
-    const cb=calcContasAParte(S.year,S.month).conf;
-    const cbAbs=Math.abs(cb),cbR=Math.floor(cbAbs/100),cbC=cbAbs%100;
-    const txt='+ R$ '+cbR.toLocaleString('pt-BR')+','+String(cbC).padStart(2,'0')+' em '+contasAparte.length+' conta'+(contasAparte.length!==1?'s':'')+' \u00e0 parte (n\u00e3o conta no or\u00e7amento)';
-    if(!apart&&apP&&apP.parentElement){
-      apart=document.createElement('div');
-      apart.id=apartElId;apart.className='ap-p';apart.style.cssText='color:var(--t3);font-size:10.5px;margin-top:2px';
-      apP.parentElement.appendChild(apart);
-    }
-    if(apart)apart.textContent=txt;
-  }else if(apart){apart.remove();}
+  // resumo das contas correntes: atual e projetado de cada conta (sem total geral, sem contas a parte)
+  try{renderAccSummary();}catch(e){console.warn('renderAccSummary',e);}
   // charts
   try{renderPie(budgetTxsOv);}catch(e){console.warn('renderPie',e);}
   // topbar month
@@ -1968,6 +1951,7 @@ function render(){
     lcAnt.textContent=(sa<0?'-':'')+'R$ '+saR2.toLocaleString('pt-BR')+','+String(saC2).padStart(2,'0');
     lcAnt.className='vg';lcAnt.style.color=sa<0?'var(--red)':'';
   }
+  try{_lcPanelSync();}catch(e){console.warn('_lcPanelSync',e);}
   const blr=el('bl-rec');if(blr){const r=Math.floor(inc/100),c=inc%100;blr.textContent='R$ '+r.toLocaleString('pt-BR')+','+String(c).padStart(2,'0');}
   const bld=el('bl-dep');if(bld){const r=Math.floor(exp/100),c=exp%100;bld.textContent='R$ '+r.toLocaleString('pt-BR')+','+String(c).padStart(2,'0');}
 }
@@ -2157,9 +2141,80 @@ function setLcFilter(f){
   });
   renderLancamentos();
 }
+function _brlC(c){c=Math.round(c||0);const a=Math.abs(c);return (c<0?'-':'')+'R$ '+Math.floor(a/100).toLocaleString('pt-BR')+','+String(a%100).padStart(2,'0');}
+// painel do topo da aba Lancamentos: sem filtro = contas correntes somadas;
+// com conta filtrada = numeros daquela conta (antes mostrava sempre a soma com o nome fixo "Nubank")
+function _lcLogoHtml(list){
+  if(list.length===1){const a=list[0];return {html:a.logo?'<img src="'+a.logo+'">':esc(a.name.charAt(0).toUpperCase()),bg:a.logo?'transparent':a.color,ov:'hidden'};}
+  return {html:'<div style="display:flex">'+list.slice(0,3).map((a,i)=>'<div style="width:18px;height:18px;border-radius:50%;background:'+a.color+';border:2px solid var(--card);margin-left:'+(i>0?'-6px':'0')+';display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:900;color:#fff;overflow:hidden;flex-shrink:0">'+(a.logo?'<img src="'+a.logo+'" style="width:100%;height:100%;object-fit:cover;border-radius:50%">':esc(a.name.charAt(0).toUpperCase()))+'</div>').join('')+'</div>',bg:'transparent',ov:'visible'};
+}
+function _lcPanelSync(){
+  const nm=document.querySelector('.lc-acc-name');
+  const rowOf=id=>{const e=el(id);return e?e.closest('.lc-stat'):null;};
+  const lcn=el('lc-nub');
+  const acc=lcAccountFilter?ACCOUNTS.find(a=>a.name===lcAccountFilter):null;
+  [rowOf('lc-rec2'),rowOf('lc-tf2')].forEach(r=>{if(r)r.style.display=acc?'none':'';});
+  const ro=rowOf('lc-out');const lo=ro?ro.querySelector('span'):null;if(lo)lo.textContent=acc?'Sa\u00eddas':'Despesas';
+  const list=acc?[acc]:ACCOUNTS.filter(isBudgetAcc);
+  if(nm)nm.textContent=acc?acc.name:(list.length===1?list[0].name:'Contas correntes');
+  if(lcn&&list.length){const L=_lcLogoHtml(list);lcn.innerHTML=L.html;lcn.style.background=L.bg;lcn.style.overflow=L.ov;}
+  if(!acc)return;
+  const pm=S.month===0?11:S.month-1,py=S.month===0?S.year-1:S.year;
+  const ant=calcMonthBalance(acc.name,py,pm).proj;
+  const cur=calcMonthBalance(acc.name,S.year,S.month);
+  let ent=0,sai=0;
+  getMonthTxs(S.year,S.month).forEach(t=>{const s=_signFor(t,acc.name);if(!s)return;const v=Math.round((t.amount||0)*100);if(s>0)ent+=v;else sai+=v;});
+  const put=(id,v,txt,colorize)=>{const e=el(id);if(!e)return;e.textContent=txt!=null?txt:_brlC(Math.abs(v));if(colorize)e.style.color=v<0?'var(--red)':'var(--green)';};
+  put('lc-conf',cur.conf,_brlC(cur.conf),true);
+  put('lc-proj',cur.proj,'Projetado: '+_brlC(cur.proj));
+  put('lc-saldo-ant',ant,_brlC(ant),true);
+  put('lc-in',ent);put('lc-out',sai);
+  put('lc-res2',ent-sai,null,true);
+  put('lc-res-total',cur.proj,_brlC(cur.proj),true);
+}
+function renderAccSummary(){
+  const box=el('acc-sum-list');if(!box)return;
+  const accs=ACCOUNTS.filter(isBudgetAcc);
+  const hd=el('acc-sum-hd');if(hd)hd.textContent=accs.length===1?'Conta corrente':'Contas correntes';
+  if(!accs.length){box.innerHTML='<div style="font-size:12px;color:var(--t3);padding:4px">Nenhuma conta corrente cadastrada</div>';return;}
+  box.innerHTML=accs.map(acc=>{
+    const b=calcMonthBalance(acc.name,S.year,S.month);
+    const logo=acc.logo?'<img src="'+acc.logo+'">':esc(acc.name.charAt(0).toUpperCase());
+    return '<div class="acc-sum-row" data-name="'+esc(acc.name)+'" onclick="goToAccountLancamentos(this.dataset.name)" title="Ver lan\u00e7amentos de '+esc(acc.name)+'">'
+      +'<div class="acp-logo" style="background:'+(acc.logo?'transparent':acc.color)+'">'+logo+'</div>'
+      +'<div class="acc-sum-nm">'+esc(acc.name)+'</div>'
+      +'<div class="acc-sum-v"><div class="acc-sum-c" style="color:'+(b.conf<0?'var(--red)':'var(--green)')+'">'+_brlC(b.conf)+'</div>'
+      +(CFG.projected?'<div class="acc-sum-p">Projetado: '+_brlC(b.proj)+'</div>':'')
+      +'</div></div>';
+  }).join('');
+}
+// resumo no fim da lista de lancamentos quando ha uma conta filtrada
+function _lcAccSummaryHtml(accName){
+  const pm=S.month===0?11:S.month-1,py=S.month===0?S.year-1:S.year;
+  const ant=calcMonthBalance(accName,py,pm).proj;
+  const cur=calcMonthBalance(accName,S.year,S.month);
+  let ent=0,sai=0;
+  getMonthTxs(S.year,S.month).forEach(t=>{const s=_signFor(t,accName);if(!s)return;const v=Math.round((t.amount||0)*100);if(s>0)ent+=v;else sai+=v;});
+  const now=new Date(),monthEnd=new Date(S.year,S.month+1,0,23,59,59,999);
+  const past=monthEnd<now;
+  const col=v=>v<0?'var(--red)':'var(--t1)';
+  const row=(lbl,val,color,bold)=>'<div class="lc-sum-r'+(bold?' lc-sum-b':'')+'"><span>'+lbl+'</span><span style="color:'+color+'">'+val+'</span></div>';
+  return '<div class="lc-sum">'
+    +'<div class="lc-sum-hd">Resumo &middot; '+esc(accName)+' &middot; '+MONTHS[S.month]+' '+S.year+'</div>'
+    +row('Saldo anterior',_brlC(ant),col(ant))
+    +row('Entradas no m\u00eas','+ '+_brlC(ent),'var(--green)')
+    +row('Sa\u00eddas no m\u00eas','- '+_brlC(sai),'var(--red)')
+    +row('Resultado do m\u00eas',_brlC(ent-sai),(ent-sai)<0?'var(--red)':'var(--green)')
+    +'<div class="lc-sum-sep"></div>'
+    +(past
+      ?row('Saldo no fim do m\u00eas',_brlC(cur.proj),col(cur.proj),true)
+      :row('Saldo atual (hoje)',_brlC(cur.conf),col(cur.conf),true)+row('Saldo projetado (fim do m\u00eas)',_brlC(cur.proj),col(cur.proj),true))
+    +'</div>';
+}
 function renderLancamentos(){
   if(el('view-lancamentos').classList.contains('hidden'))return;
   updateLcAccChip();
+  try{_lcPanelSync();}catch(e){console.warn('_lcPanelSync',e);}
   const q=(el('lc-search')||{value:''}).value.toLowerCase();
   const allMonthTxs=getMonthTxs(S.year,S.month);
   const txs=allMonthTxs.filter(t=>{
@@ -2169,12 +2224,14 @@ function renderLancamentos(){
     return matchQ&&matchF&&matchA;
   });
   const list=el('lc-tx-list');if(!list)return;
-  if(!txs.length){list.innerHTML='<div class="empty-st" style="padding:40px"><div class="empty-ico">&#x1F50D;</div><div class="empty-ttl">Nenhum lan\u00e7amento encontrado</div></div>';return;}
+  if(!txs.length){list.innerHTML='<div class="empty-st" style="padding:40px"><div class="empty-ico">&#x1F50D;</div><div class="empty-ttl">Nenhum lan\u00e7amento encontrado</div></div>'+(lcAccountFilter?_lcAccSummaryHtml(lcAccountFilter):'');return;}
 
   // Running balance — all accounts combined
   // receita=+1, despesa=-1, transferencia=0 (moves between accounts, net zero)
-  const _totalSign=t=>t.type==='receita'?1:t.type==='despesa'?-1:0;
-  let runBal=calcSaldoAnterior(S.year,S.month);
+  const _totalSign=lcAccountFilter?(t=>_signFor(t,lcAccountFilter)):(t=>t.type==='receita'?1:t.type==='despesa'?-1:0);
+  let runBal=lcAccountFilter
+    ?calcMonthBalance(lcAccountFilter,S.month===0?S.year-1:S.year,S.month===0?11:S.month-1).proj
+    :calcSaldoAnterior(S.year,S.month);
   const saldoAnteriorVal=runBal;
   const balMap={};
   [...allMonthTxs].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).forEach(t=>{
@@ -2231,7 +2288,7 @@ function renderLancamentos(){
       +'</div>'
       +'<div class="tx-am" style="color:'+color+';font-weight:700">'+sign+'R$ '+rv.toLocaleString('pt-BR')+','+String(cv).padStart(2,'0')+'</div>'
     +'</div>';
-  }).join('')).join('');
+  }).join('')).join('')+(lcAccountFilter?_lcAccSummaryHtml(lcAccountFilter):'');
 }
 
 // ========== CATEGORIAS ==========
@@ -3010,6 +3067,7 @@ renderConfig();
 checkAutoConfirm();
 if(GH.token&&GH.user&&GH.repo){
   ghUpdateBadge();
+  document.addEventListener('DOMContentLoaded',ghUpdateBadge); // o indicador fica depois deste script no HTML
   ghSync(); // le o GitHub, mescla com o que esta no aparelho e so entao grava
 }else if(!_loadedLocal&&!localStorage.getItem('fin_welcomed')){
   setTimeout(showWelcomeBanner,600);
