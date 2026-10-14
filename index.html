@@ -571,6 +571,19 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 .lc-sum-b{font-size:13.5px;color:var(--t1);font-weight:700}
 .lc-sum-b span:last-child{font-weight:800}
 .lc-sum-sep{border-top:1px solid var(--border);margin:7px 0}
+.grp-hint{font-size:11.5px;line-height:1.45;color:var(--t2);background:rgba(59,130,246,.10);border:1px solid rgba(59,130,246,.35);border-radius:8px;padding:8px 10px;margin-bottom:10px}
+.grp-hint b{color:var(--t1)}
+.scope-ov{position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px}
+.scope-box{width:100%;max-width:360px;background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 12px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:8px}
+.scope-ttl{font-size:15px;font-weight:700;color:var(--t1)}
+.scope-msg{font-size:12.5px;color:var(--t2);line-height:1.45;margin-bottom:4px}
+.scope-msg b{color:var(--t1)}
+.scope-opt{display:flex;flex-direction:column;align-items:flex-start;gap:2px;width:100%;text-align:left;background:var(--surface);color:var(--t1);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+.scope-opt:hover,.scope-opt:focus-visible{border-color:var(--green);outline:none}
+.scope-opt small{font-size:11px;font-weight:400;color:var(--t3);font-family:var(--mono)}
+.scope-opt.danger:hover,.scope-opt.danger:focus-visible{border-color:var(--red)}
+.scope-opt.danger span{color:var(--red)}
+.scope-cancel{background:none;border:none;color:var(--t2);font:inherit;font-size:13px;padding:8px;cursor:pointer;margin-top:2px}
 </style>
 </head>
 <body>
@@ -845,6 +858,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
   <div class="modal">
     <div class="m-hdr"><button class="mtype-btn" onclick="cycleType()"><span id="m-icon">&#x2193;</span><span id="m-label">Nova despesa</span><span class="edit-badge" id="m-edit-badge" style="display:none">Editando</span><span class="mtype-arr">&#x25BE;</span></button><button class="m-close" onclick="closeModal()">&#x2715;</button></div>
     <div class="m-body">
+      <div class="grp-hint" id="m-grp-hint" hidden></div>
       <div class="fr fr-3">
         <div class="ff"><label class="flbl">Valor (R$) <span class="req">*</span></label><div class="val-wrap" id="val-wrap"><span class="val-prefix">R$</span><input class="finp currency" type="text" inputmode="numeric" id="f-val" value="0,00" onkeydown="valKeydown(event)" oninput="valInput(event)" onfocus="_cursorEnd(this)"></div><span class="ferr" id="ferr-val">Informe um valor maior que zero</span></div>
         <div class="ff"><label class="flbl">Data <span class="req">*</span></label><input class="finp" type="date" id="f-data" onchange="checkFutureDate(this.value)"><span id="sched-hint" style="font-size:10.5px;color:var(--amber);display:none;margin-top:2px">&#x23F0; Data futura — será agendado</span></div>
@@ -2536,14 +2550,125 @@ function prefillFromTx(txId){
   clearAutoFill();
   if(tx.category)setCselVal('tx',tx.category,getCatDisplay(tx.category)||tx.category);
   else setCselVal('tx','','');
+  try{updateGrpHint(tx);}catch(e){console.warn('grpHint',e);}
 }
 
+// ========== GRUPOS (parcelas e fixos ligados) ==========
+// Parcelas (tag "📦 i/n") e fixos (tag "♻") criados juntos formam um grupo (campo grp).
+// Lancamentos antigos, criados antes do campo grp, sao reconhecidos pela descricao, conta,
+// tipo, numeracao/mes e pelo horario de criacao embutido no id.
+const PARC_RE=/^📦 (\d+)\/(\d+)$/;
+function _monthIdx(d){const p=String(d||'').split('-');return (+p[0])*12+(+p[1]-1);}
+function _idTime(id){const m=/^tx_(\d{12,})_/.exec(id||'');return m?+m[1]:null;}
+function _grpSort(a,b){return (a.date||'').localeCompare(b.date||'')||((+((PARC_RE.exec(a.tag||'')||[])[1])||0)-(+((PARC_RE.exec(b.tag||'')||[])[1])||0));}
+function txGroup(tx){
+  if(!tx)return [];
+  if(tx.grp)return S.txs.filter(t=>t.grp===tx.grp).sort(_grpSort);
+  const m=PARC_RE.exec(tx.tag||'');
+  const isFixa=tx.tag==='♻';
+  if(!m&&!isFixa)return [tx];
+  const t0=_idTime(tx.id);
+  const near=t=>{const t1=_idTime(t.id);return t0==null||t1==null||Math.abs(t1-t0)<15000;};
+  const same=t=>!t.grp&&t.type===tx.type&&(t.desc||'')===(tx.desc||'')&&(t.account||'')===(tx.account||'')&&near(t);
+  let g;
+  if(m){
+    const i0=+m[1],n=+m[2],mi0=_monthIdx(tx.date);
+    g=S.txs.filter(t=>{if(!same(t))return false;const mm=PARC_RE.exec(t.tag||'');return !!mm&&+mm[2]===n&&_monthIdx(t.date)-mi0===(+mm[1])-i0;});
+  }else{
+    g=S.txs.filter(t=>t.tag==='♻'&&same(t));
+  }
+  if(!g.includes(tx))g.push(tx);
+  return g.sort(_grpSort);
+}
+function _grpKind(tx){return PARC_RE.test(tx.tag||'')?'parc':'fixa';}
+function _grpLink(g){ // grava o vinculo nos lancamentos antigos (id deterministico: igual em todos os aparelhos)
+  if(g.length<2)return;
+  const gid=g[0].grp||('g_'+g.map(t=>t.id).sort()[0]);
+  g.forEach(t=>{t.grp=gid;});
+}
+function _mesAno(d){const p=String(d||'').split('-');return (MSHORT[(+p[1])-1]||'?').toLowerCase()+'/'+String(p[0]).slice(2);}
+function _grpPos(tx){
+  const m=PARC_RE.exec(tx.tag||'');
+  return m?{i:+m[1],n:+m[2]}:null;
+}
+function _withDay(dateStr,day){
+  const p=String(dateStr).split('-').map(Number);const last=new Date(p[0],p[1],0).getDate();
+  return p[0]+'-'+String(p[1]).padStart(2,'0')+'-'+String(Math.min(day,last)).padStart(2,'0');
+}
+// texto de faixa para os botoes: "3/10 a 10/10 · 8 lancamentos" ou "out/26 a set/28 · 24 lancamentos"
+function _grpRange(list){
+  if(!list.length)return '';
+  const a=list[0],b=list[list.length-1];
+  const pa=_grpPos(a),pb=_grpPos(b);
+  if(list.length===1)return pa?('parcela '+pa.i+'/'+pa.n):_mesAno(a.date);
+  const rng=pa&&pb?(pa.i+'/'+pa.n+' a '+pb.i+'/'+pb.n):(_mesAno(a.date)+' a '+_mesAno(b.date));
+  return rng+' · '+list.length+' lançamento'+(list.length!==1?'s':'');
+}
+function _grpTargets(tx,g,scope){
+  if(scope==='all')return g;
+  if(scope==='next'){const i=g.indexOf(tx);return g.slice(i<0?0:i);}
+  return [tx];
+}
+// janela de escolha (substitui o confirm do navegador)
+function askScope(o){
+  return new Promise(res=>{
+    const ov=document.createElement('div');ov.className='scope-ov';
+    ov.innerHTML='<div class="scope-box" role="dialog" aria-modal="true">'
+      +'<div class="scope-ttl">'+o.title+'</div>'
+      +(o.msg?'<div class="scope-msg">'+o.msg+'</div>':'')
+      +o.opts.map(x=>'<button type="button" class="scope-opt'+(x.danger?' danger':'')+'" data-v="'+x.v+'"><span>'+x.label+'</span>'+(x.sub?'<small>'+x.sub+'</small>':'')+'</button>').join('')
+      +'<button type="button" class="scope-cancel" data-v="">Cancelar</button></div>';
+    const kd=e=>{if(e.key==='Escape'){e.stopImmediatePropagation();e.preventDefault();done(null);}};
+    function done(v){ov.remove();document.removeEventListener('keydown',kd,true);res(v||null);}
+    ov.addEventListener('click',e=>{e.stopPropagation();const b=e.target.closest('[data-v]');if(b)done(b.dataset.v);else if(e.target===ov)done(null);});
+    document.addEventListener('keydown',kd,true);
+    document.body.appendChild(ov);
+    const first=ov.querySelector('.scope-opt');if(first)first.focus();
+  });
+}
+function _scopeOpts(tx,g,mode){ // mode: 'edit' | 'del'
+  const parc=_grpKind(tx)==='parc',i=g.indexOf(tx);
+  const L=mode==='del'
+    ?(parc?['S\u00f3 esta parcela','Esta e as pr\u00f3ximas','Todas as parcelas']:['S\u00f3 este m\u00eas','Este e os pr\u00f3ximos meses','Todos os meses'])
+    :(parc?['S\u00f3 nesta parcela','Nesta e nas pr\u00f3ximas','Em todas as parcelas']:['S\u00f3 neste m\u00eas','Neste e nos pr\u00f3ximos meses','Em todos os meses']);
+  const opts=[{v:'one',label:L[0],sub:_grpRange([tx])}];
+  if(i>0&&i<g.length-1)opts.push({v:'next',label:L[1],sub:_grpRange(g.slice(i))});
+  opts.push({v:'all',label:L[2],sub:_grpRange(g)});
+  if(mode==='del')opts.forEach(o=>o.danger=true);
+  return opts;
+}
+function _grpDesc(tx){
+  const p=_grpPos(tx);
+  return p?'Parcela <b>'+p.i+' de '+p.n+'</b>':'Lançamento fixo (repete todo mês)';
+}
+// aviso dentro do formulario de edicao
+function updateGrpHint(tx){
+  const h=el('m-grp-hint');if(!h)return;
+  const g=tx?txGroup(tx):[];
+  if(g.length<2){h.hidden=true;h.innerHTML='';return;}
+  h.innerHTML='&#x1F517; '+_grpDesc(tx)+' &middot; '+(_grpKind(tx)==='parc'?'ligada':'ligado')+' a '+(g.length-1)+' outro'+(g.length>2?'s':'')+' lançamento'+(g.length>2?'s':'')+'. Ao salvar, você escolhe onde aplicar a alteração.';
+  h.hidden=false;
+}
+const GRP_FIELDS=['type','amount','desc','category','account','accountDest','obs','tags','date'];
+const GRP_LBL={type:'tipo',amount:'valor',desc:'descrição',category:'categoria',account:'conta',accountDest:'conta destino',obs:'observação',tags:'tags',date:'dia do mês'};
+
 function deleteTx(id){
-  if(!cfgConfirm('Excluir este lançamento?'))return;
-  closeMenu();
-  S.txs=S.txs.filter(t=>t.id!==id);
-  render();renderLancamentos();renderConfig();autoSave();
-  showToast('Lançamento excluído');
+  const tx=S.txs.find(t=>t.id===id);if(!tx)return;
+  const g=txGroup(tx);
+  const doDel=scope=>{
+    const targets=new Set(_grpTargets(tx,g,scope));
+    closeMenu();
+    S.txs=S.txs.filter(t=>!targets.has(t));
+    render();renderLancamentos();renderConfig();autoSave();
+    showToast(targets.size>1?targets.size+' lan\u00e7amentos exclu\u00eddos':'Lan\u00e7amento exclu\u00eddo');
+  };
+  if(g.length>1){
+    closeMenu();
+    askScope({title:'Excluir',msg:_grpDesc(tx)+(tx.desc?' &middot; '+esc(tx.desc):'')+'.',opts:_scopeOpts(tx,g,'del')}).then(s=>{if(s)doDel(s);});
+    return;
+  }
+  if(!cfgConfirm('Excluir este lan\u00e7amento?'))return;
+  doDel('one');
 }
 
 function toggleTxConfirm(id){
@@ -2630,6 +2755,7 @@ function updModal(){
 
 function checkFutureDate(v){if(!v)return;const p=v.split('-').map(Number);const isFut=new Date(p[0],p[1]-1,p[2])>new Date();const h2=el('sched-hint');if(h2)h2.style.display=isFut?'block':'none';}
 function clearForm(){
+  try{updateGrpHint(null);}catch(e){}
   resetVal();el('f-data').value=today();el('f-rep').value='unica';
   el('f-desc').value='';el('f-obs').value='';el('f-tags').value='';el('f-nparc').value='';
   el('obs-cnt').textContent='0 / 400';
@@ -2720,15 +2846,35 @@ function saveEntry(andNew){
   // ── EDIT MODE ──
   if(editingTxId){
     const tx=S.txs.find(t=>t.id===editingTxId);
-    if(tx){
-      tx.type=MTYPES[mti].id;tx.amount=val;tx.date=el('f-data').value||today();
-      tx.desc=el('f-desc').value.trim()||undefined;tx.category=cat;
-      tx.account=el('f-conta').value;
-      if(MTYPES[mti].id==='transferencia'&&el('f-conta-dest')&&el('f-conta-dest').value)tx.accountDest=el('f-conta-dest').value;else delete tx.accountDest;
-      tx.obs=el('f-obs').value.trim()||undefined;tx.tags=el('f-tags').value.trim()||undefined;
+    if(!tx){editingTxId=null;closeModal();return;}
+    const after={type:MTYPES[mti].id,amount:val,date:el('f-data').value||today(),
+      desc:el('f-desc').value.trim()||undefined,category:finalCat,account:el('f-conta').value,
+      accountDest:(isTfSave&&el('f-conta-dest')&&el('f-conta-dest').value)?el('f-conta-dest').value:undefined,
+      obs:el('f-obs').value.trim()||undefined,tags:el('f-tags').value.trim()||undefined};
+    const J=v=>JSON.stringify(v===undefined?null:v);
+    const dayOf=d=>+String(d||'').split('-')[2];
+    // o que mudou (a data so conta se mudou o DIA; mudar so o mes vale apenas para este)
+    const changed=GRP_FIELDS.filter(k=>k==='date'?dayOf(after.date)!==dayOf(tx.date):J(after[k])!==J(tx[k]));
+    const g=txGroup(tx);
+    const apply=scope=>{
+      const targets=_grpTargets(tx,g,scope);
+      if(scope!=='one')_grpLink(g);
+      targets.forEach(t=>{
+        if(t===tx){GRP_FIELDS.forEach(k=>{if(after[k]===undefined)delete t[k];else t[k]=after[k];});return;}
+        changed.forEach(k=>{
+          if(k==='date'){t.date=_withDay(t.date,dayOf(after.date));return;}
+          if(after[k]===undefined)delete t[k];else t[k]=after[k];
+        });
+      });
+      editingTxId=null;closeModal();render();renderLancamentos();renderConfig();autoSave();
+      showToast(targets.length>1?targets.length+' lan\u00e7amentos atualizados!':'Lan\u00e7amento atualizado!');
+    };
+    if(g.length>1&&changed.length){
+      askScope({title:'Aplicar altera\u00e7\u00e3o',msg:_grpDesc(tx)+'. Voc\u00ea alterou: <b>'+changed.map(k=>GRP_LBL[k]).join(', ')+'</b>.',opts:_scopeOpts(tx,g,'edit')})
+        .then(s=>{if(s)apply(s);});
+      return;
     }
-    editingTxId=null;closeModal();render();renderLancamentos();renderConfig();autoSave();
-    showToast('Lançamento atualizado!');return;
+    apply('one');return;
   }
   const rep=el('f-rep').value;
   const n=parseInt(el('f-nparc').value)||0;
@@ -2736,12 +2882,13 @@ function saveEntry(andNew){
   const base={type:MTYPES[mti].id,desc:el('f-desc').value.trim()||undefined,category:finalCat,account:el('f-conta').value,...(isTfSave&&el('f-conta-dest')&&el('f-conta-dest').value?{accountDest:el('f-conta-dest').value}:{}),obs:el('f-obs').value.trim()||undefined,tags:el('f-tags').value.trim()||undefined};
   const dateParts=(el('f-data').value||today()).split('-');
   let year=+dateParts[0],month=+dateParts[1]-1;
+  const gid='g_'+genId();
   if(rep==='unica'){addTx({...base,id:genId(),date:el('f-data').value||today()});}
-  else if(rep==='fixa'){for(let i=0;i<24;i++){const mn=addM(year,month,i);addTx({...base,id:genId(),date:mn.year+'-'+String(mn.month+1).padStart(2,'0')+'-'+String(+dateParts[2]).padStart(2,'0'),tag:'\u267B'});}}
+  else if(rep==='fixa'){for(let i=0;i<24;i++){const mn=addM(year,month,i);addTx({...base,id:genId(),date:mn.year+'-'+String(mn.month+1).padStart(2,'0')+'-'+String(+dateParts[2]).padStart(2,'0'),tag:'\u267B',grp:gid});}}
   else if(rep==='parcelado'){
     const tipo=(document.querySelector('input[name="vtipo"]:checked')||{value:'parcela'}).value;
     const pVal=tipo==='parcela'?val:val/n;
-    for(let i=0;i<n;i++){const mn=addM(year,month,i);addTx({...base,id:genId(),amount:pVal,date:mn.year+'-'+String(mn.month+1).padStart(2,'0')+'-'+String(+dateParts[2]).padStart(2,'0'),tag:'\uD83D\uDCE6 '+(i+1)+'/'+n});}}
+    for(let i=0;i<n;i++){const mn=addM(year,month,i);addTx({...base,id:genId(),amount:pVal,date:mn.year+'-'+String(mn.month+1).padStart(2,'0')+'-'+String(+dateParts[2]).padStart(2,'0'),tag:'\uD83D\uDCE6 '+(i+1)+'/'+n,grp:gid});}}
   if(rep!=='parcelado'){
     const txLast=S.txs[S.txs.length-1];
     if(txLast&&!txLast.amount)txLast.amount=val;
