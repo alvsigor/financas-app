@@ -1,8 +1,7 @@
-// Service worker do dashboard. So cuida do "app shell" (o proprio index.html) —
-// os dados continuam vindo do GitHub normalmente, isso aqui e so pra permitir
-// instalar como app e abrir rapido mesmo com conexao ruim.
-const CACHE_NAME = 'financas-shell-v1';
-const SHELL_FILES = ['./index.html', './manifest.json'];
+// Service worker do Finanças App. Cuida só do "casco" do app (index.html e manifest),
+// para abrir rápido e funcionar sem internet. Os dados vêm do GitHub e NÃO passam por aqui.
+const CACHE_NAME = 'financas-shell-v2';
+const SHELL_FILES = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -12,25 +11,33 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
+  // apaga caches antigos (inclusive respostas da API do GitHub guardadas pela versão anterior)
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Network-first para o index.html (sempre tenta buscar a versao mais nova),
-// cai pro cache só se estiver offline.
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
+  const req = event.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  // Outros sites (API do GitHub, fontes): direto na rede, sem cache.
+  if (url.origin !== self.location.origin) return;
+  // Rede primeiro, sempre conferindo com o servidor ('no-cache'), para que uma versão
+  // nova do index.html apareça na hora. Sem internet, usa a última cópia guardada.
+  const isPage = req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+  const netReq = isPage ? new Request(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : req;
   event.respondWith(
-    fetch(event.request)
+    fetch(netReq)
       .then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+        }
         return res;
       })
-      .catch(() => caches.match(event.request))
+      .catch(() => caches.match(req).then((r) => r || (isPage ? caches.match('./index.html') : undefined)))
   );
 });
