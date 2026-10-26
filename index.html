@@ -646,6 +646,15 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
 .rb-empty{font-size:12px;color:var(--t3);padding:10px 0}
 .rtip{position:fixed;z-index:1300;max-width:260px;background:var(--bg);border:1px solid var(--border);color:var(--t1);font-size:11px;line-height:1.4;padding:6px 8px;border-radius:8px;pointer-events:none;box-shadow:0 6px 20px rgba(0,0,0,.4)}
 @media(max-width:820px){.rf-xl{margin-left:0;width:100%;justify-content:center}.ri-v{font-size:15px}.rb-src{padding-left:14px;grid-template-columns:minmax(0,1.2fr) minmax(30px,.8fr) 34px auto}}
+.hist-box{max-width:560px;max-height:88vh;overflow-y:auto}
+.hist-hd{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.hist-row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--border);cursor:pointer}
+.hist-row input{margin-top:3px;flex-shrink:0;width:16px;height:16px;accent-color:var(--green)}
+.hist-main{flex:1;min-width:0}
+.hist-t{display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:600;color:var(--t1)}
+.hist-t span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist-ok{font-size:13px;color:var(--green);padding:12px 0}
+.hist-mine{margin-top:12px;font-size:12px;color:var(--t2)}.hist-mine summary{cursor:pointer;padding:6px 0}
 </style>
 </head>
 <body>
@@ -868,6 +877,7 @@ textarea.finp{resize:vertical;min-height:52px;max-height:80px}
         <div id="gh-action-row" style="display:none;gap:8px;flex-wrap:wrap">
           <button class="gh-btn" onclick="ghPull()">&#x2B07; Carregar do GitHub</button>
           <button class="gh-btn primary" onclick="ghPush()">&#x2B06; Salvar no GitHub</button>
+          <button class="gh-btn" onclick="openHistory()">&#x1F50E; Procurar lan&#231;amentos sumidos</button>
         </div>
         <span id="sync-pending-badge" hidden style="align-self:flex-start;width:fit-content;background:#f59e0b;color:#000;font-size:10px;padding:2px 7px;border-radius:9px;font-weight:700;margin-right:6px;vertical-align:middle">⏳ sync pendente</span><div class="gh-status" id="gh-status-msg"><div class="gh-dot gh-dot-idle"></div><span>N&#227;o conectado</span></div>
       </div>
@@ -1250,9 +1260,65 @@ function importLocalFile(event){
   };
   reader.readAsText(file,'utf-8');
 }
+// ---- exclusoes explicitas ("lapides") e controle entre janelas do mesmo aparelho ----
+// Regra de ouro: um lancamento so some se alguem o EXCLUIU. Ausencia de um lado nunca apaga.
+let DELETED={};                 // 't:<id>' | 'a:<id>' | 'r:<id>' -> data da exclusao (ISO)
+let _lastIds=null,_memBase=null,_myRev=null;
+const TOMB_DAYS=400;
+function _idsNow(){const f=a=>new Set((a||[]).map(x=>x&&x.id).filter(Boolean));return {t:f(S.txs),a:f(ACCOUNTS),r:f(RULES)};}
+function _trackReset(){_lastIds=_idsNow();_memBase=ghLocalCore();}
+function _tombPrune(m){const lim=Date.now()-TOMB_DAYS*864e5,o={};for(const k in (m||{})){const t=Date.parse(m[k]);if(!(t<lim))o[k]=m[k];}return o;}
+function _tombUnion(a,b){const o=Object.assign({},a||{});for(const k in (b||{})){if(!o[k]||b[k]>o[k])o[k]=b[k];}return _tombPrune(o);}
+function _trackDeletions(){
+  const now=new Date().toISOString(),cur=_idsNow();
+  if(_lastIds)['t','a','r'].forEach(p=>_lastIds[p].forEach(id=>{if(!cur[p].has(id))DELETED[p+':'+id]=now;}));
+  // voltou a existir (restaurado/desfeito): tira a lapide e marca o item como restaurado depois dela
+  const arrs={t:S.txs,a:ACCOUNTS,r:RULES};
+  ['t','a','r'].forEach(p=>(arrs[p]||[]).forEach(x=>{if(x&&x.id&&DELETED[p+':'+x.id]){delete DELETED[p+':'+x.id];x._r=now;}}));
+  _lastIds=cur;
+}
+function _storedRev(){try{return localStorage.getItem('fin_rev')||'0';}catch(e){return '0';}}
+function _writeLocal(){
+  localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,deleted:DELETED,savedAt:new Date().toISOString()}));
+  const r=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  try{localStorage.setItem('fin_rev',r);}catch(e){}_myRev=r;
+}
+function _applyCore(d){
+  S.txs=d.txs||[];
+  if(d.accounts&&d.accounts.length)ACCOUNTS=d.accounts;
+  if(d.rules)RULES=d.rules;
+  if(d.cats){
+    if(d.cats.despesa)CATS.despesa=d.cats.despesa;
+    if(d.cats.receita)CATS.receita=d.cats.receita;
+    if(d.cats.transferencia)CATS.transferencia=d.cats.transferencia;
+    if(!CATS.transferencia)CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T||[]));
+  }
+  if(d.cfg)Object.assign(CFG,d.cfg);
+  DELETED=_tombPrune(d.deleted||{});
+}
+function _loadCoreFromStorage(){try{const d=JSON.parse(localStorage.getItem('fin_data')||'null');return d?ghCore(d):null;}catch(e){return null;}}
+function _rerenderAll(){try{render();updateRuleBadges();try{updateCatCounts();}catch(e){}buildContaSelect();renderConfig();if(typeof renderLancamentos==='function')renderLancamentos();}catch(e){console.warn('rerender',e);}}
+// outra janela deste aparelho gravou depois desta: recarrega antes de seguir
+function _syncFromStorageIfNewer(){
+  if(_myRev===null||_storedRev()===_myRev)return false;
+  autoLoad();_myRev=_storedRev();_trackReset();_rerenderAll();
+  return true;
+}
+window.addEventListener('storage',e=>{
+  if(e.key!=='fin_rev'||!e.newValue||e.newValue===_myRev)return;
+  const editing=document.querySelector('#m-overlay.open,.scope-ov');if(editing)return; // nao mexe no meio de uma edicao
+  _syncFromStorageIfNewer();
+});
 function autoSave(){
   try{
-    localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()}));
+    _trackDeletions();
+    // esta janela estava desatualizada (outra gravou depois): junta em vez de gravar por cima
+    if(_myRev!==null&&_storedRev()!==_myRev){
+      const other=_loadCoreFromStorage();
+      if(other){_applyCore(ghMerge(_memBase,ghLocalCore(),other));_lastIds=_idsNow();setTimeout(_rerenderAll,0);}
+    }
+    _writeLocal();
+    _memBase=ghLocalCore();
     ghMarkDirty();
     ghSchedulePush();
   }catch(e){console.warn('autoSave failed',e);}
@@ -1273,6 +1339,7 @@ function autoLoad(){
       if(!CATS.transferencia)CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T||[]));
     }
     if(d.cfg)Object.assign(CFG,d.cfg);
+    DELETED=_tombPrune(d.deleted||{});
     return true;
   }catch(e){return false;}
 }
@@ -1380,8 +1447,8 @@ function ghMarkDirty(){_localRev++;try{localStorage.setItem('fin_dirty','1');}ca
 function ghMarkClean(){try{localStorage.removeItem('fin_dirty');localStorage.removeItem('fin_pending_sync');}catch(e){}ghUpdateBadge();}
 function ghGetBase(){try{return JSON.parse(localStorage.getItem('fin_base')||'null');}catch(e){return null;}}
 function ghSetBase(d){try{localStorage.setItem('fin_base',JSON.stringify(ghCore(d)));}catch(e){console.warn('fin_base',e);}}
-function ghCore(d){d=d||{};return {txs:d.txs||[],accounts:d.accounts||[],rules:d.rules||[],cats:d.cats||{},cfg:d.cfg||{}};}
-function ghLocalCore(){return ghCore({txs:S.txs,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG});}
+function ghCore(d){d=d||{};return {txs:d.txs||[],accounts:d.accounts||[],rules:d.rules||[],cats:d.cats||{},cfg:d.cfg||{},deleted:d.deleted||{}};}
+function ghLocalCore(){return ghCore({txs:S.txs,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,deleted:DELETED});}
 
 function ghUpdateBadge(){
   const configured=!!(GH.token&&GH.user&&GH.repo);
@@ -1396,29 +1463,25 @@ function ghUpdateBadge(){
   p.hidden=!txt;p.textContent=txt;p.className='sync-pill '+cls;
 }
 
-// merge de 3 vias por id
-function ghMergeById(baseArr,localArr,remoteArr,hasBase){
-  const J=JSON.stringify,key=(x,i)=>(x&&x.id!=null)?String(x.id):'__'+J(x);
-  const bMap=new Map((baseArr||[]).map((x,i)=>[key(x,i),J(x)]));
-  const lMap=new Map((localArr||[]).map((x,i)=>[key(x,i),x]));
-  const rMap=new Map((remoteArr||[]).map((x,i)=>[key(x,i),x]));
-  const out=[];
-  const decide=(k)=>{
-    const l=lMap.get(k),r=rMap.get(k),b=bMap.get(k);
+// merge por id. Ausencia de um lado NUNCA apaga: so some o que tem lapide (exclusao explicita).
+// Presente nos dois lados: base diz quem editou (editado aqui -> local; senao -> remoto).
+function ghMergeById(p,baseArr,localArr,remoteArr,hasBase,tomb){
+  const J=JSON.stringify,key=x=>(x&&x.id!=null)?String(x.id):'__'+J(x);
+  const bMap=new Map((baseArr||[]).map(x=>[key(x),J(x)]));
+  const lMap=new Map((localArr||[]).map(x=>[key(x),x]));
+  const rMap=new Map((remoteArr||[]).map(x=>[key(x),x]));
+  const alive=(k,v)=>{const t=tomb[p+':'+k];return !t||!!(v&&v._r&&v._r>t);};
+  const pick=k=>{
+    const l=lMap.get(k),r=rMap.get(k);let v;
     if(l&&r){
-      if(!hasBase)return r;                 // sem base: versoes iguais na maioria, fica a do GitHub
-      return J(l)!==b?l:r;                  // editado aqui -> local; senao -> remoto
-    }
-    if(l){ // so existe aqui
-      if(hasBase&&b!==undefined&&J(l)===b)return null; // foi apagado no outro aparelho
-      return l;                                         // novo (ou editado) aqui
-    }
-    if(hasBase&&b!==undefined&&J(r)===b)return null;   // foi apagado aqui
-    return r;                                           // novo no outro aparelho
+      if(hasBase&&bMap.has(k))v=J(l)!==bMap.get(k)?l:r;
+      else v=((l._r||'')>(r._r||''))?l:r;
+    }else v=l||r;
+    return alive(k,v)?v:null;
   };
-  const seen=new Set();
-  for(const k of rMap.keys()){seen.add(k);const v=decide(k);if(v)out.push(v);}
-  for(const k of lMap.keys()){if(seen.has(k))continue;const v=decide(k);if(v)out.push(v);}
+  const out=[],seen=new Set();
+  for(const k of rMap.keys()){seen.add(k);const v=pick(k);if(v)out.push(v);}
+  for(const k of lMap.keys()){if(seen.has(k))continue;const v=pick(k);if(v)out.push(v);}
   return out;
 }
 function ghMergeObj(b,l,r,hasBase){
@@ -1429,27 +1492,23 @@ function ghMergeObj(b,l,r,hasBase){
 }
 function ghMerge(base,local,remote){
   const hb=!!base;base=base||{};
-  return {
-    txs:ghMergeById(base.txs,local.txs,remote.txs,hb),
-    accounts:ghMergeById(base.accounts,local.accounts,remote.accounts,hb),
-    rules:ghMergeById(base.rules,local.rules,remote.rules,hb),
+  const tomb=_tombUnion(local.deleted,remote.deleted);
+  const res={
+    txs:ghMergeById('t',base.txs,local.txs,remote.txs,hb,tomb),
+    accounts:ghMergeById('a',base.accounts,local.accounts,remote.accounts,hb,tomb),
+    rules:ghMergeById('r',base.rules,local.rules,remote.rules,hb,tomb),
     cats:ghMergeObj(base.cats,local.cats,remote.cats,hb),
     cfg:ghMergeObj(base.cfg,local.cfg,remote.cfg,hb),
   };
+  [['t','txs'],['a','accounts'],['r','rules']].forEach(([p,f])=>res[f].forEach(x=>{if(x&&x.id){const k=p+':'+x.id;if(tomb[k]&&x._r&&x._r>tomb[k])delete tomb[k];}}));
+  res.deleted=tomb;
+  return res;
 }
 
 function ghApplyData(d){
-  S.txs=d.txs||[];
-  if(d.accounts&&d.accounts.length)ACCOUNTS=d.accounts;
-  if(d.rules)RULES=d.rules;
-  if(d.cats){
-    if(d.cats.despesa)CATS.despesa=d.cats.despesa;
-    if(d.cats.receita)CATS.receita=d.cats.receita;
-    if(d.cats.transferencia)CATS.transferencia=d.cats.transferencia;
-    if(!CATS.transferencia)CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T||[]));
-  }
-  if(d.cfg)Object.assign(CFG,d.cfg);
-  try{localStorage.setItem('fin_data',JSON.stringify({v:2,txs:S.txs,month:S.month,year:S.year,accounts:ACCOUNTS,rules:RULES,cats:CATS,cfg:CFG,savedAt:new Date().toISOString()}));}catch(e){console.warn('fin_data',e);}
+  _applyCore(d);
+  try{_writeLocal();}catch(e){console.warn('fin_data',e);}
+  _trackReset();
   try{render();updateRuleBadges();try{updateCatCounts();}catch(e){}buildContaSelect();renderConfig();checkAutoConfirm();
     if(typeof renderLancamentos==='function')try{renderLancamentos();}catch(e){}
   }catch(e){console.warn('render apos sync',e);}
@@ -1463,18 +1522,31 @@ function ghFetch(url,opts,ms){
     fetch(url,opts).then(r=>{clearTimeout(t);res(r);},e=>{clearTimeout(t);rej(e);});
   });
 }
-async function ghReadRemote(){
-  const r=await ghFetch(ghApiUrl(),{headers:ghHeaders(),cache:'no-store'},15000);
-  if(r.status===404)return {data:null,sha:''};
+// Logo depois de gravar, o GitHub as vezes ainda devolve a versao anterior por alguns segundos.
+// Guardamos as versoes (sha) que ja substituimos; se a leitura devolver uma delas, esperamos e lemos de novo.
+function _oldShas(){try{return JSON.parse(localStorage.getItem('fin_old_shas')||'[]');}catch(e){return [];}}
+function _addOldSha(x){if(!x)return;const a=_oldShas().filter(v=>v!==x);a.push(x);try{localStorage.setItem('fin_old_shas',JSON.stringify(a.slice(-60)));}catch(e){}}
+async function _ghGetContent(ref){
+  const r=await ghFetch(ghApiUrl()+(ref?'?ref='+encodeURIComponent(ref):''),{headers:ghHeaders(),cache:'no-store'},20000);
+  if(r.status===404)return null;
   if(!r.ok)throw new Error('GitHub respondeu HTTP '+r.status+' ao ler');
   const d=await r.json();
   let content=d.content;
   if(!content&&d.git_url){ // arquivos > 1 MB: a Contents API nao manda o conteudo, busca o blob
-    const rb=await ghFetch(d.git_url,{headers:ghHeaders(),cache:'no-store'},20000);
+    const rb=await ghFetch(d.git_url,{headers:ghHeaders(),cache:'no-store'},25000);
     if(!rb.ok)throw new Error('HTTP '+rb.status+' ao ler blob');
     content=(await rb.json()).content;
   }
   return {data:JSON.parse(b64DecodeUtf8(content)),sha:d.sha||''};
+}
+async function ghReadRemote(){
+  for(let i=0;i<5;i++){
+    const got=await _ghGetContent();
+    if(!got)return {data:null,sha:''};
+    if(got.sha&&_oldShas().includes(got.sha)){await new Promise(r=>setTimeout(r,1200+i*900));continue;}
+    return got;
+  }
+  const e=new Error('o GitHub ainda est\u00e1 atualizando; tento de novo em instantes');e.name='StaleError';throw e;
 }
 
 async function ghSync(opts){
@@ -1484,18 +1556,17 @@ async function ghSync(opts){
   _syncBusy=true;_syncErr='';ghUpdateBadge();
   const sm=el('gh-status-msg');if(sm)sm.classList.add('gh-syncing');
   ghSetStatus('Sincronizando...','idle');
-  let ok=false,pushed=false,pulled=false,mergedNew=0;
+  let ok=false,pushed=false,pulled=false,mergedNew=0,stale=false;
   try{
+    _syncFromStorageIfNewer(); // outra janela deste aparelho pode ter gravado algo mais novo
     for(let attempt=0;attempt<3&&!ok;attempt++){
       const {data:remoteRaw,sha}=await ghReadRemote();
       const remote=remoteRaw?ghCore(remoteRaw):null;
       const rev=_localRev;
       const local=ghLocalCore();
       const dirty=ghIsDirty();
-      let result;
-      if(!remote)result=local;
-      else if(!dirty)result=remote;
-      else result=ghMerge(ghGetBase(),local,remote);
+      void dirty;
+      const result=remote?ghMerge(ghGetBase(),local,remote):local; // sempre junta; nada some sem lapide
       const J=JSON.stringify;
       if(J(result)!==J(local)){
         if(remote){const lIds=new Set(local.txs.map(t=>t.id));mergedNew=result.txs.filter(t=>!lIds.has(t.id)).length;}
@@ -1513,6 +1584,7 @@ async function ghSync(opts){
       if(p.status===409||p.status===422){continue;} // GitHub mudou no meio do caminho: le e mescla de novo
       if(!p.ok){const err=await p.json().catch(()=>({}));throw new Error(err.message||('HTTP '+p.status+' ao salvar'));}
       const pd=await p.json();
+      _addOldSha(sha); // a versao que acabamos de substituir nunca mais e a atual
       GH.sha=(pd.content&&pd.content.sha)||'';ghSaveConfigToStorage();
       ghSetBase(result);
       if(_localRev===rev)ghMarkClean();else _syncAgain=true;
@@ -1528,7 +1600,8 @@ async function ghSync(opts){
   }catch(e){
     // erro de rede: o navegador costuma lancar TypeError, mas alguns ambientes (visualizador do Claude,
     // WebViews) lancam um Error comum so com a mensagem. Por isso olha tambem o texto.
-    const net=!navigator.onLine||e instanceof TypeError||e.name==='TimeoutError'||e.name==='AbortError'
+    stale=e&&e.name==='StaleError';
+    const net=stale||!navigator.onLine||e instanceof TypeError||e.name==='TimeoutError'||e.name==='AbortError'
       ||/failed to fetch|load failed|networkerror|network request failed|network error|internet/i.test(String(e&&e.message||e));
     try{localStorage.setItem('fin_pending_sync','1');}catch(x){}
     _syncErr=net?'':(e.message||String(e));
@@ -1540,6 +1613,7 @@ async function ghSync(opts){
     const sm2=el('gh-status-msg');if(sm2)sm2.classList.remove('gh-syncing');
     ghUpdateBadge();
     if(_syncAgain){_syncAgain=false;ghSchedulePush();}
+    else if(stale)ghSchedulePush(5000);
   }
   return ok;
 }
@@ -1547,6 +1621,94 @@ async function ghSync(opts){
 // compatibilidade com botoes/chamadas antigas
 async function ghPush(){return ghSync({manual:true});}
 async function ghPull(){return ghSync({manual:true});}
+
+// ========== RECUPERAR LANCAMENTOS SUMIDOS (historico do GitHub) ==========
+// Cada sincronizacao gera uma versao do dados.json no GitHub. Aqui lemos as versoes de um periodo
+// e listamos os lancamentos que existiram em alguma delas e nao existem mais agora.
+function _ghRepoApi(){return 'https://api.github.com/repos/'+GH.user+'/'+GH.repo;}
+async function _ghCommits(params){
+  let out=[];
+  for(let page=1;page<=5;page++){
+    const r=await ghFetch(_ghRepoApi()+'/commits?path='+encodeURIComponent(GH.file)+'&per_page=100&page='+page+params,{headers:ghHeaders(),cache:'no-store'},20000);
+    if(!r.ok)throw new Error('HTTP '+r.status+' ao listar as versões');
+    const a=await r.json();out=out.concat(a);if(a.length<100)break;
+  }
+  return out;
+}
+async function histScan(days,onProg){
+  const since=new Date(Date.now()-days*864e5).toISOString();
+  let commits=await _ghCommits('&since='+since);
+  const before=await _ghCommits('&until='+since).then(a=>a.slice(0,1)).catch(()=>[]); // versao de partida
+  const map=new Map();[...commits,...before].forEach(c=>map.set(c.sha,c));
+  commits=[...map.values()].sort((x,y)=>x.commit.committer.date.localeCompare(y.commit.committer.date));
+  const MAX=150,cut=commits.length>MAX;if(cut)commits=commits.slice(-MAX);
+  const seen=new Map();let done=0;const q=commits.slice();
+  const work=async()=>{while(q.length){const c=q.shift();const when=c.commit.committer.date;
+    try{const got=await _ghGetContent(c.sha);const txs=(got&&got.data&&got.data.txs)||[];
+      txs.forEach(t=>{if(!t||!t.id)return;const p=seen.get(t.id);if(!p)seen.set(t.id,{tx:t,first:when,last:when});else{if(when>p.last){p.last=when;p.tx=t;}if(when<p.first)p.first=when;}});
+    }catch(e){console.warn('versao',c.sha,e);}
+    done++;onProg&&onProg(done,commits.length);}};
+  await Promise.all([work(),work(),work(),work()]);
+  const nowIds=new Set(S.txs.map(t=>t.id));
+  const gone=[...seen.values()].filter(v=>!nowIds.has(v.tx.id));
+  const sig=t=>[t.date,t.type,Math.round((t.amount||0)*100),t.account].join('|');
+  const nowSig=new Set(S.txs.map(sig));
+  gone.forEach(v=>{v.byYou=!!DELETED['t:'+v.tx.id];v.maybeDup=nowSig.has(sig(v.tx));});
+  gone.sort((a,b)=>(b.tx.date||'').localeCompare(a.tx.date||''));
+  return {gone,versions:commits.length,cut,days};
+}
+let _histRes=null;
+function openHistory(){
+  if(!GH.token||!GH.user||!GH.repo){showToast('Configure a sincronização do GitHub primeiro');return;}
+  const ov=document.createElement('div');ov.className='scope-ov';ov.id='hist-ov';
+  ov.innerHTML='<div class="scope-box hist-box" role="dialog" aria-modal="true">'
+    +'<div class="hist-hd"><div class="scope-ttl">Procurar lançamentos sumidos</div><button class="m-close" onclick="closeHistory()">&#x2715;</button></div>'
+    +'<div class="scope-msg">Cada vez que o app sincroniza, o GitHub guarda uma versão dos seus dados. Esta busca lê essas versões e mostra os lançamentos que existiram em alguma delas e não existem mais agora. Nada é alterado até você tocar em Restaurar.</div>'
+    +'<div class="rf-row"><span class="rf-lbl">Procurar nos últimos</span>'+[7,15,30,60].map(d=>'<button class="fpill fp-g'+(d===15?' active':'')+'" data-d="'+d+'" onclick="histPick(this)">'+d+' dias</button>').join('')+'</div>'
+    +'<button class="btn btn-g" id="hist-go" style="width:100%;justify-content:center" onclick="histRun()">Procurar</button>'
+    +'<div id="hist-out"></div></div>';
+  ov.addEventListener('click',e=>{if(e.target===ov)closeHistory();});
+  document.body.appendChild(ov);
+}
+function closeHistory(){const o=el('hist-ov');if(o)o.remove();}
+function histPick(b){document.querySelectorAll('#hist-ov [data-d]').forEach(x=>x.classList.toggle('active',x===b));}
+async function histRun(){
+  const days=+((document.querySelector('#hist-ov [data-d].active')||{}).dataset||{}).d||15;
+  const out=el('hist-out'),go=el('hist-go');go.disabled=true;go.textContent='Procurando...';
+  out.innerHTML='<div class="rnote" id="hist-prog">Listando as versões...</div>';
+  try{
+    _histRes=await histScan(days,(d,n)=>{const p=el('hist-prog');if(p)p.textContent='Lendo versão '+d+' de '+n+'...';});
+    histRender();
+  }catch(e){out.innerHTML='<div class="rnote" style="color:var(--red)">Não consegui ler o histórico: '+esc(e.message||String(e))+'</div>';}
+  go.disabled=false;go.textContent='Procurar de novo';
+}
+function histRender(){
+  const R=_histRes,out=el('hist-out');if(!R||!out)return;
+  const fmt=iso=>{const d=new Date(iso);return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
+  const lost=R.gone.filter(v=>!v.byYou),mine=R.gone.filter(v=>v.byYou);
+  const row=(v,i,checked)=>{const t=v.tx,c=_cents(t.amount),sg=t.type==='receita'?'+':t.type==='despesa'?'-':'';
+    return '<label class="hist-row"><input type="checkbox" data-i="'+i+'"'+(checked?' checked':'')+'><div class="hist-main"><div class="hist-t"><span>'+esc(t.desc||'Sem descrição')+'</span><span class="rmono" style="color:'+(t.type==='receita'?'var(--green)':t.type==='despesa'?'var(--red)':'var(--blue)')+'">'+sg+_brlC(c)+'</span></div>'
+      +'<div class="rtop-sub">'+fmDate(t.date)+'/'+String(t.date||'').slice(2,4)+' · '+esc(t.account||'')+(t.category?' · '+esc(t.category):'')+(t.tag?' · '+esc(t.tag):'')+' · visto até '+fmt(v.last)+(v.maybeDup?' · <b style="color:var(--amber)">talvez já relançado</b>':'')+'</div></div></label>';};
+  let h='<div class="rnote">'+R.versions+' versões lidas'+(R.cut?' (as 150 mais recentes)':'')+'.</div>';
+  if(!R.gone.length)h+='<div class="hist-ok">Nenhum lançamento sumiu nos últimos '+R.days+' dias.</div>';
+  if(lost.length){h+='<div class="rsub-t">Sumiram sem você excluir ('+lost.length+')</div><div class="rnote">Inclui também o que você excluiu antes desta versão do app, que ainda não registrava exclusões. Os marcados como "talvez já relançado" têm um lançamento igual (data, valor e conta) hoje; desmarque para não duplicar.</div>'
+    +lost.map(v=>row(v,R.gone.indexOf(v),!v.maybeDup)).join('');}
+  if(mine.length){h+='<details class="hist-mine"><summary>Excluídos por você ('+mine.length+')</summary>'+mine.map(v=>row(v,R.gone.indexOf(v),false)).join('')+'</details>';}
+  if(R.gone.length)h+='<button class="btn btn-g" style="width:100%;justify-content:center;margin-top:10px" onclick="histRestore()">Restaurar selecionados</button>';
+  out.innerHTML=h;
+}
+function histRestore(){
+  const R=_histRes;if(!R)return;
+  const sel=[...document.querySelectorAll('#hist-ov input[type=checkbox]:checked')].map(x=>R.gone[+x.dataset.i]).filter(Boolean);
+  if(!sel.length){showToast('Nenhum lançamento selecionado');return;}
+  const now=new Set(S.txs.map(t=>t.id));let n=0;
+  sel.forEach(v=>{if(now.has(v.tx.id))return;const t=JSON.parse(JSON.stringify(v.tx));S.txs.push(t);n++;});
+  autoSave(); // tira a lapide de quem foi excluido e marca como restaurado
+  render();try{renderLancamentos();}catch(e){}renderConfig();
+  showToast('✔ '+n+' lançamento(s) restaurado(s)');
+  R.gone=R.gone.filter(v=>!sel.includes(v));histRender();
+}
+
 
 let ghPushTimer=null;
 function ghSchedulePush(delay){
@@ -1584,7 +1746,7 @@ function renderConfig(){
   sv('cfg-s-txs',S.txs.length);sv('cfg-s-accs',ACCOUNTS.length);sv('cfg-s-rules',RULES.length);sv('cfg-s-cats',['despesa','receita','transferencia'].reduce((a,t)=>a+countCats(t),0));
 }
 function cfgConfirm(msg){return !CFG.confirm||confirm(msg);}
-function cfgClearTxs(){if(!cfgConfirm('Limpar TODOS os lan\u00e7amentos?'))return;S.txs=[];render();renderConfig();showToast('Lan\u00e7amentos limpos');}
+function cfgClearTxs(){if(!cfgConfirm('Limpar TODOS os lan\u00e7amentos?'))return;S.txs=[];render();renderConfig();autoSave();showToast('Lan\u00e7amentos limpos');}
 function cfgClearRules(){if(!cfgConfirm('Limpar todas as regras?'))return;RULES=[];updateRuleBadges();renderConfig();showToast('Regras removidas');}
 function cfgResetCats(){if(!cfgConfirm('Restaurar categorias padr\u00e3o?'))return;CATS.despesa=JSON.parse(JSON.stringify(DCATS_D));CATS.receita=JSON.parse(JSON.stringify(DCATS_R));CATS.transferencia=JSON.parse(JSON.stringify(DCATS_T));updateCatCounts();renderCategorias();renderConfig();autoSave();showToast('Categorias restauradas');}
 function cfgResetAccounts(){if(!cfgConfirm('Restaurar conta padr\u00e3o?'))return;ACCOUNTS=[{id:'nubank',name:'Nubank',type:'corrente',color:'#820AD1',openingBalance:0}];buildContaSelect();renderContas();renderConfig();autoSave();showToast('Conta padr\u00e3o restaurada');}
@@ -3722,6 +3884,7 @@ function editUserName(){
 // ========== INIT ==========
 ghLoadConfig();
 const _loadedLocal=autoLoad();
+_trackReset();_myRev=_storedRev();
 render();
 updateRuleBadges();updateSidebar();
 try{updateCatCounts();}catch(e){console.warn('updateCatCounts',e);}
